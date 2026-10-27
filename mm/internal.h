@@ -1591,4 +1591,18 @@ static inline bool can_modify_vma_madv(struct vm_area_struct *vma, int behavior)
 }
 
 #endif
+/*
+ * Batched unlink_file_vma() calls, used from free_pgtables() to avoid
+ * acquiring i_mmap_rwsem once per VMA of the same file.
+ * (upstream commit 2f6d33c4 "mm: batch unlink_file_vma calls in free_pgd_range")
+ */
+struct unlink_vma_file_batch {
+	int count;
+	struct vm_area_struct *vmas[8];
+};
+
+void unlink_file_vma_batch_init(struct unlink_vma_file_batch *);
+void unlink_file_vma_batch_add(struct unlink_vma_file_batch *, struct vm_area_struct *);
+void unlink_file_vma_batch_final(struct unlink_vma_file_batch *);
+
 #endif	/* __MM_INTERNAL_H */
