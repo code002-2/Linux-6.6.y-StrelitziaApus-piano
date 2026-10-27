@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
 #include <linux/mutex.h>
+#include <linux/android_kabi.h>
 
 #ifdef CONFIG_CGROUP_DEVICE
 
@@ -43,7 +44,20 @@ struct dev_exception_item {
 struct dev_cgroup {
 	struct cgroup_subsys_state css;
 	struct list_head exceptions;
-	enum devcg_behavior behavior;
+	// enum devcg_behavior behavior;
+	/* behavior is in the ANDROID_KABI_USE(1) field below */
+
+#if defined(CONFIG_CGROUP_DEVICE)
+	ANDROID_KABI_USE(1, enum devcg_behavior behavior);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+#else
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+#endif
 };
 
 static inline struct dev_cgroup *css_to_devcgroup(struct cgroup_subsys_state *s)
