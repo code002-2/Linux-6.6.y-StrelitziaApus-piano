@@ -1359,7 +1359,40 @@ static ssize_t comp_algorithm_store(struct device *dev,
 	struct zram *zram = dev_to_zram(dev);
 	int ret;
 
+#ifdef CONFIG_ZRAM_MULTI_COMP
+	/*
+	 * code002: 对齐 6.12 上游语义 —— comp_algorithm 接受空格分隔的算法
+	 * 列表，依次填入 comp_algs[0..ZRAM_MAX_COMPS-1]。
+	 *
+	 * 移植时这里只能设主算法，导致 comp_algs[SECONDARY..] 永远为空，
+	 * recomp_algorithm_store() 找不到目标算法而返回 -EINVAL，
+	 * 于是 recompress 成为无法启用的死代码。
+	 */
+	{
+		char *algs, *alg, *save;
+		u32 prio = ZRAM_PRIMARY_COMP;
+
+		algs = kstrdup(buf, GFP_KERNEL);
+		if (!algs)
+			return -ENOMEM;
+
+		ret = 0;
+		while ((alg = strsep(&algs, " \t\n")) != NULL) {
+			if (!*alg)
+				continue;
+			ret = __comp_algorithm_store(zram, prio, alg);
+			if (ret)
+				break;
+			if (++prio >= ZRAM_MAX_COMPS)
+				break;
+		}
+		(void)save;
+		kfree(algs);
+	}
+#else
 	ret = __comp_algorithm_store(zram, ZRAM_PRIMARY_COMP, buf);
+#endif
+
 	return ret ? ret : len;
 }
 

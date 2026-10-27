@@ -69,3 +69,25 @@ CONFIG_DAMON_SYSFS=y
 CONFIG_DAMON_RECLAIM=y
 CONFIG_DAMON_LRU_SORT=y
 CONFIG_HZ_300=y
+
+# ===== zram 多压缩器（配合 systemless 模块替换厂商 zram.ko）=====
+CONFIG_ZRAM_MULTI_COMP=y
+CONFIG_ZRAM_WRITEBACK=y
+CONFIG_ZRAM_BACKEND_LZO=y
+CONFIG_ZRAM_BACKEND_LZ4=y
+CONFIG_ZRAM_BACKEND_LZ4HC=y
+CONFIG_ZRAM_BACKEND_ZSTD=y
+CONFIG_ZRAM_BACKEND_DEFLATE=y
+CONFIG_ZRAM_DEF_COMP_LZ4=y
+
+# ===== zram 多压缩器（配合 systemless 模块替换厂商 zram.ko）=====
+# ===== 基线（已验证可开机）=====
+# ===== 第一批（已验证）=====
+# ===== 第二批：LXC 完整 =====
+# 命名空间
+# 容器网络
+# 文件系统能力
+# ===== 第三批：LXC 网络完整 =====
+# ===== 性能批次：DAMON =====
+# ===== zram 多压缩器（配合 systemless 模块替换厂商 zram.ko）=====
+# ===== zram 多压缩器（配合 systemless 模块替换厂商 zram.ko）=====
