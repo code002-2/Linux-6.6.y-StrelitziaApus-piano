@@ -138,9 +138,7 @@ struct net {
 #if IS_ENABLED(CONFIG_IEEE802154_6LOWPAN)
 	struct netns_ieee802154_lowpan	ieee802154_lowpan;
 #endif
-#if defined(CONFIG_IP_SCTP) || defined(CONFIG_IP_SCTP_MODULE)
-	struct netns_sctp	sctp;
-#endif
+	/* code002: sctp 已搬到末尾（保持 ABI 零位移）*/
 #ifdef CONFIG_NETFILTER
 	struct netns_nf		nf;
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
@@ -165,9 +163,7 @@ struct net {
 
 	u64			net_cookie; /* written once */
 
-#if IS_ENABLED(CONFIG_IP_VS)
-	struct netns_ipvs	*ipvs;
-#endif
+	/* code002: ipvs 已搬到末尾（保持 ABI 零位移）*/
 #if IS_ENABLED(CONFIG_MPLS)
 	struct netns_mpls	mpls;
 #endif
@@ -195,6 +191,24 @@ struct net {
 	 * 已有偏移一个都不动，genksyms 侧完全隐藏 -> CRC 与原厂一致。
 	 */
 	struct netns_nftables	nft;
+#endif
+#endif
+#if IS_ENABLED(CONFIG_NETFILTER_FAMILY_BRIDGE)
+#ifndef __GENKSYMS__
+	/* code002: hooks_bridge 已搬到 struct net 末尾（保持 ABI 零位移）*/
+	struct nf_hook_entries __rcu *nf_hooks_bridge[NF_INET_NUMHOOKS];
+#endif
+#endif
+#if defined(CONFIG_IP_SCTP) || defined(CONFIG_IP_SCTP_MODULE)
+#ifndef __GENKSYMS__
+	/* code002: sctp 已搬到末尾（保持 ABI 零位移）*/
+	struct netns_sctp	sctp;
+#endif
+#endif
+#if IS_ENABLED(CONFIG_IP_VS)
+#ifndef __GENKSYMS__
+	/* code002: ipvs 已搬到末尾（保持 ABI 零位移）*/
+	struct netns_ipvs	*ipvs;
 #endif
 #endif
 } __randomize_layout;

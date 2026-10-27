@@ -25,9 +25,7 @@ struct netns_nf {
 #ifdef CONFIG_NETFILTER_FAMILY_ARP
 	struct nf_hook_entries __rcu *hooks_arp[NF_ARP_NUMHOOKS];
 #endif
-#ifdef CONFIG_NETFILTER_FAMILY_BRIDGE
-	struct nf_hook_entries __rcu *hooks_bridge[NF_INET_NUMHOOKS];
-#endif
+	/* code002: hooks_bridge 已搬到 struct net 末尾（保持 ABI 零位移）*/
 #if IS_ENABLED(CONFIG_NF_DEFRAG_IPV4)
 	unsigned int defrag_ipv4_users;
 #endif
