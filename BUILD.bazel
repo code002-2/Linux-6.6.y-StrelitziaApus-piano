@@ -152,18 +152,6 @@ filegroup(
 )
 
 _CODE002_MODULE_OUTS = [
-    "net/netfilter/nft_ct.ko",
-    "net/netfilter/nft_chain_nat.ko",
-    "net/ipv6/netfilter/ip6table_nat.ko",
-    "net/netfilter/nft_fib_inet.ko",
-    "net/netfilter/nft_redir.ko",
-    "net/netfilter/nft_masq.ko",
-    "net/netfilter/nft_nat.ko",
-    "net/ipv6/netfilter/nft_fib_ipv6.ko",
-    "net/netfilter/nft_fib.ko",
-    "net/ipv4/netfilter/nft_fib_ipv4.ko",
-    "net/netfilter/nft_compat.ko",
-    "drivers/net/vxlan/vxlan.ko",
 ]
 
 define_common_kernels(target_configs = {
