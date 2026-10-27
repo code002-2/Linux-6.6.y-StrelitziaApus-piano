@@ -5368,11 +5368,13 @@ place_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 
 	se->vruntime = vruntime - lag;
 
+#ifdef CONFIG_SCHED_BORE
 	if (likely(sched_bore) && se->burst.rel_deadline) {
 		se->deadline += se->vruntime;
 		se->burst.rel_deadline = 0;
 		return;
 	}
+#endif
 #ifdef CONFIG_SCHED_BORE
 	else if (likely(sched_bore))
 		vslice >>= !!(flags & sched_deadline_boost_mask);
@@ -5518,8 +5520,10 @@ dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se, int flags)
 	update_entity_lag(cfs_rq, se);
 	if (!sleep) {
 		se->deadline -= se->vruntime;
+#ifdef CONFIG_SCHED_BORE
 		if (likely(sched_bore))
 			se->burst.rel_deadline = 1;
+#endif
 	}
 
 	if (se != cfs_rq->curr)
@@ -13076,8 +13080,8 @@ static void attach_task_cfs_rq(struct task_struct *p)
 
 static void switched_from_fair(struct rq *rq, struct task_struct *p)
 {
-	p->se.burst.rel_deadline = 0;
 #ifdef CONFIG_SCHED_BORE
+	p->se.burst.rel_deadline = 0;
 	init_task_bore(p);
 #endif // CONFIG_SCHED_BORE
 	detach_task_cfs_rq(p);
