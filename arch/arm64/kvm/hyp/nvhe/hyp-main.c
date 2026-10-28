@@ -33,9 +33,6 @@
 
 #include "../../sys_regs.h"
 
-	/* __hyp_running_vcpu must be NULL in a guest context. */
-	hyp_vcpu->vcpu.arch.ctxt.__hyp_running_vcpu = NULL;
-
 DEFINE_PER_CPU(struct kvm_nvhe_init_params, kvm_init_params);
 
 struct kvm_iommu_ops *kvm_iommu_ops;
@@ -67,9 +64,6 @@ static inline void hyp_reqs_smccc_encode(unsigned long ret, struct kvm_cpu_conte
 	req->type = KVM_HYP_LAST_REQ;
 }
 
-/* Number of implemented GICv3 LRs. Used by flush_hyp_vcpu(). */
-unsigned int hyp_gicv3_nr_lr;
-
 void __kvm_hyp_host_forward_smc(struct kvm_cpu_context *host_ctxt);
 
 static void fpsimd_host_restore(struct kvm_vcpu *vcpu);
@@ -94,12 +88,6 @@ int __pkvm_register_default_trap_handler(bool (*cb)(struct user_pt_regs *))
 	return cmpxchg(&default_trap_handler, NULL, cb) ? -EBUSY : 0;
 }
 
-
-	/* Bound used_lrs by the number of implemented list registers. */
-	hyp_vcpu->vcpu.arch.vgic_cpu.vgic_v3.used_lrs =
-		min_t(unsigned int,
-		      hyp_vcpu->vcpu.arch.vgic_cpu.vgic_v3.used_lrs,
-		      hyp_gicv3_nr_lr);
 void __pkvm_unmask_serror(void)
 {
 	u64 hcr = read_sysreg(HCR_EL2);

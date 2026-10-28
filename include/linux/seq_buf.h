@@ -161,4 +161,24 @@ seq_buf_bprintf(struct seq_buf *s, const char *fmt, const u32 *binary);
 
 void seq_buf_do_printk(struct seq_buf *s, const char *lvl);
 
+
+/**
+ * seq_buf_str - NUL-terminate the buffer and return it
+ * @s: the seq_buf
+ *
+ * Backport of the 6.6.145 helper used by tracing to bound synthetic
+ * field strings.  Returns NULL for an uninitialised buffer; when the
+ * buffer overflowed the contents are left untouched.
+ */
+static inline char *seq_buf_str(struct seq_buf *s)
+{
+	if (WARN_ON(s->size == 0))
+		return NULL;
+
+	if (s->len < s->size)
+		s->buffer[s->len] = '\0';
+
+	return s->buffer;
+}
+
 #endif /* _LINUX_SEQ_BUF_H */
