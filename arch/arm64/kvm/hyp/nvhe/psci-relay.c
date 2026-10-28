@@ -218,6 +218,9 @@ static int psci_system_suspend(u64 func_id, struct kvm_cpu_context *host_ctxt)
 	 */
 	boot_args->pc = pc;
 	boot_args->r0 = r0;
+	write_sysreg_el1(INIT_SCTLR_EL1_MMU_OFF, SYS_SCTLR);
+	write_sysreg(INIT_PSTATE_EL1, SPSR_EL2);
+
 
 	pkvm_psci_notify(PKVM_PSCI_SYSTEM_SUSPEND, host_ctxt);
 
