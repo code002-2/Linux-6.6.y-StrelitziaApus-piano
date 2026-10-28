@@ -2419,7 +2419,11 @@ static int binder_translate_binder(struct flat_binder_object *fp,
 {
 	struct binder_node *node;
 	struct binder_proc *proc = thread->proc;
-	struct binder_proc *target_proc = t->to_proc;
+	struct binder_proc *target_proc;
+
+	spin_lock(&t->lock);
+	target_proc = t->to_proc;
+	spin_unlock(&t->lock);
 	struct binder_ref_data rdata;
 	int ret = 0;
 
