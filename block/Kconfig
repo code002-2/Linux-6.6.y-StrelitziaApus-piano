@@ -45,6 +45,17 @@ config BLK_CGROUP_RWSTAT
 config BLK_CGROUP_PUNT_BIO
 	bool
 
+config ANDROID_BLKCG_PUNT_BIO_KMI_EXT
+	def_bool y
+	depends on BLK_CGROUP_PUNT_BIO && ANDROID_KABI_RESERVE
+	depends on ARM64 && 64BIT && !CPU_BIG_ENDIAN
+	help
+	  Keep the BLK_CGROUP_PUNT_BIO state in a sidecar referenced through
+	  two verified natural 32-bit holes in struct blkcg_gq.  This avoids
+	  expanding the frozen Android GKI blkcg_gq layout when Btrfs selects
+	  BLK_CGROUP_PUNT_BIO.  The configuration is intentionally restricted
+	  to the reviewed arm64 little-endian GKI layout.
+
 config BLK_DEV_BSG_COMMON
 	tristate
 

@@ -58,6 +58,7 @@ struct pt_regs;
  *    also disable bh.
  *  - bits 8: is used for tracking preemptible kernel-mode Vector, when
  *    RISCV_ISA_V_PREEMPTIVE is enabled. Calling kernel_vector_begin() does not
+	unsigned long status;
  *    disable the preemption if the thread's kernel_vstate.datap is allocated.
  *    Instead, the kernel set this bit field. Then the trap entry/exit code
  *    knows if we are entering/exiting the context that owns preempt_v.

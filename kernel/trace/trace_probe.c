@@ -620,7 +620,7 @@ static int parse_btf_arg(char *varname,
 	int i, is_ptr, ret;
 	u32 tid;
 
-	if (WARN_ON_ONCE(!ctx->funcname))
+	if (!ctx->funcname)
 		return -EINVAL;
 
 	is_ptr = split_next_field(varname, &field, ctx);
@@ -1721,7 +1721,11 @@ const char **traceprobe_expand_meta_args(int argc, const char *argv[],
 				ret = -ENOENT;
 				goto error;
 			}
-			/* Note: $argN starts from $arg1 */
+			/* Note: $argN starts from $arg1, so $arg0 is invalid. */
+			if (n == 0) {
+				trace_probe_log_err(0, BAD_ARG_NUM);
+				return ERR_PTR(-EINVAL);
+			}
 			ret = sprint_nth_btf_arg(n - 1, type, buf + used,
 						 bufsize - used, ctx);
 			if (ret < 0)

@@ -466,10 +466,22 @@ static void btrfs_submit_dev_bio(struct btrfs_device *dev, struct bio *bio)
 
 	btrfsic_check_bio(bio);
 
-	if (bio->bi_opf & REQ_BTRFS_CGROUP_PUNT)
-		blkcg_punt_bio_submit(bio);
-	else
+	if (bio->bi_opf & REQ_BTRFS_CGROUP_PUNT) {
+#if IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT) && \
+	IS_MODULE(CONFIG_BTRFS_FS)
+		/*
+		 * The GKI profile keeps blkcg_punt_bio_submit private so this
+		 * loadable filesystem cannot introduce a new KMI export.  Direct
+		 * submission preserves I/O correctness; only the optional punt
+		 * optimization is omitted for the module form.
+		 */
 		submit_bio(bio);
+#else
+		blkcg_punt_bio_submit(bio);
+#endif
+	} else {
+		submit_bio(bio);
+	}
 }
 
 static void btrfs_submit_mirrored_bio(struct btrfs_io_context *bioc, int dev_nr)
@@ -780,8 +792,14 @@ int btrfs_repair_io_failure(struct btrfs_fs_info *fs_info, u64 ino, u64 start,
 	struct bio bio;
 	int ret = 0;
 
-	ASSERT(!(fs_info->sb->s_flags & SB_RDONLY));
 	BUG_ON(!mirror_num);
+
+	/*
+	 * The fs either mounted RO or hit critical errors, no need
+	 * to continue repairing.
+	 */
+	if (unlikely(sb_rdonly(fs_info->sb)))
+		return 0;
 
 	if (btrfs_repair_one_zone(fs_info, logical))
 		return 0;

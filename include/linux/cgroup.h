@@ -129,6 +129,27 @@ struct cgroup *cgroup_get_from_path(const char *path);
 struct cgroup *cgroup_get_from_fd(int fd);
 struct cgroup *cgroup_v1v2_get_from_fd(int fd);
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
+#define ANDROID_CGROUP_NET_CLASSID_BIT	((u16)BIT(14))
+
+u32 android_cgroup_net_cls_task_classid(struct task_struct *task);
+u32 android_cgroup_net_cls_get_classid(const struct cgroup *cgrp);
+int android_cgroup_net_cls_set_classid(struct cgroup *cgrp, u32 classid);
+void android_cgroup_net_cls_inherit(struct cgroup *cgrp,
+				    const struct cgroup *parent);
+void android_cgroup_net_cls_update_task(struct task_struct *task);
+int android_cgroup_net_cls_setup_root(struct cgroup_root *root);
+void android_cgroup_net_cls_teardown_root(struct cgroup_root *root);
+#endif
+
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+struct perf_cgroup;
+struct perf_cgroup *android_cgroup_perf_kmi_get(struct cgroup *cgrp);
+int android_cgroup_perf_kmi_set(struct cgroup *cgrp,
+				struct perf_cgroup *perf);
+struct perf_cgroup *android_cgroup_perf_kmi_take(struct cgroup *cgrp);
+#endif
+
 int cgroup_attach_task_all(struct task_struct *from, struct task_struct *);
 int cgroup_transfer_tasks(struct cgroup *to, struct cgroup *from);
 
@@ -710,6 +731,7 @@ static inline void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen)
 /*
  * cgroup scalable recursive statistics.
  */
+void __cgroup_rstat_updated(struct cgroup *cgrp, int cpu);
 void cgroup_rstat_updated(struct cgroup *cgrp, int cpu);
 void cgroup_rstat_flush(struct cgroup *cgrp);
 void cgroup_rstat_flush_hold(struct cgroup *cgrp);

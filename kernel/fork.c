@@ -647,6 +647,7 @@ void free_task(struct task_struct *tsk)
 	if (tsk->flags & PF_KTHREAD)
 		free_kthread_struct(tsk);
 	bpf_task_storage_free(tsk);
+	sysv_task_free(tsk);
 	free_task_struct(tsk);
 }
 EXPORT_SYMBOL(free_task);
@@ -661,8 +662,8 @@ static void dup_mm_exe_file(struct mm_struct *mm, struct mm_struct *oldmm)
 	 * We depend on the oldmm having properly denied write access to the
 	 * exe_file already.
 	 */
-	if (exe_file && deny_write_access(exe_file))
-		pr_warn_once("deny_write_access() failed in %s\n", __func__);
+	if (exe_file && exe_file_deny_write_access(exe_file))
+		pr_warn_once("exe_file_deny_write_access() failed in %s\n", __func__);
 }
 
 #ifdef CONFIG_MMU
@@ -882,7 +883,41 @@ static void check_mm(struct mm_struct *mm)
 }
 
 #define allocate_mm()	(kmem_cache_alloc(mm_cachep, GFP_KERNEL))
+
+#ifdef CONFIG_ANDROID_HUGETLB_KMI_EXT
+static int hugetlb_mm_ext_alloc(struct mm_struct *mm)
+{
+	struct android_hugetlb_mm_ext *ext;
+
+	/* dup_mm() copies padding too, so never inherit oldmm's sidecar. */
+	hugetlb_mm_ext_reset(mm);
+	if (mm == &init_mm)
+		return 0;
+
+	ext = kzalloc(sizeof(*ext), GFP_KERNEL_ACCOUNT);
+	if (!ext)
+		return -ENOMEM;
+
+	atomic_long_set(&ext->usage, 0);
+	hugetlb_mm_ext_set(mm, ext);
+	return 0;
+}
+
+static void hugetlb_mm_ext_free(struct mm_struct *mm)
+{
+	/* init_mm is static and deliberately has no dynamically allocated sidecar. */
+	if (mm != &init_mm)
+		kfree(hugetlb_mm_ext_take(mm));
+}
+
+static void free_mm(struct mm_struct *mm)
+{
+	hugetlb_mm_ext_free(mm);
+	kmem_cache_free(mm_cachep, mm);
+}
+#else
 #define free_mm(mm)	(kmem_cache_free(mm_cachep, (mm)))
+#endif
 
 static void do_check_lazy_tlb(void *arg)
 {
@@ -1161,6 +1196,11 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	if (err)
 		goto free_tsk;
 
+#if defined(CONFIG_SYSVIPC) && defined(CONFIG_ANDROID_KABI_RESERVE)
+	/* Do not let an unfinished child retain its parent's SysV IPC sidecar. */
+	WRITE_ONCE(tsk->android_kabi_reserved6, 0);
+#endif
+
 	err = alloc_thread_stack_node(tsk, node);
 	if (err)
 		goto free_tsk;
@@ -1348,6 +1388,10 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->pmd_huge_pte = NULL;
 #endif
 	mm_init_uprobes_state(mm);
+#ifdef CONFIG_ANDROID_HUGETLB_KMI_EXT
+	if (hugetlb_mm_ext_alloc(mm))
+		goto fail_nopgd;
+#endif
 	hugetlb_count_init(mm);
 
 	if (current->mm) {
@@ -1486,13 +1530,13 @@ int set_mm_exe_file(struct mm_struct *mm, struct file *new_exe_file)
 		 * We expect the caller (i.e., sys_execve) to already denied
 		 * write access, so this is unlikely to fail.
 		 */
-		if (unlikely(deny_write_access(new_exe_file)))
+		if (unlikely(exe_file_deny_write_access(new_exe_file)))
 			return -EACCES;
 		get_file(new_exe_file);
 	}
 	rcu_assign_pointer(mm->exe_file, new_exe_file);
 	if (old_exe_file) {
-		allow_write_access(old_exe_file);
+		exe_file_allow_write_access(old_exe_file);
 		fput(old_exe_file);
 	}
 	return 0;
@@ -1531,7 +1575,7 @@ int replace_mm_exe_file(struct mm_struct *mm, struct file *new_exe_file)
 			return ret;
 	}
 
-	ret = deny_write_access(new_exe_file);
+	ret = exe_file_deny_write_access(new_exe_file);
 	if (ret)
 		return -EACCES;
 	get_file(new_exe_file);
@@ -1543,7 +1587,7 @@ int replace_mm_exe_file(struct mm_struct *mm, struct file *new_exe_file)
 	mmap_write_unlock(mm);
 
 	if (old_exe_file) {
-		allow_write_access(old_exe_file);
+		exe_file_allow_write_access(old_exe_file);
 		fput(old_exe_file);
 	}
 	return 0;
@@ -1749,6 +1793,10 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 		goto fail_nomem;
 
 	memcpy(mm, oldmm, sizeof(*mm));
+#ifdef CONFIG_ANDROID_HUGETLB_KMI_EXT
+	/* Do not let the bulk copy alias oldmm's HugeTLB sidecar. */
+	hugetlb_mm_ext_reset(mm);
+#endif
 	mm->dmabuf_info = NULL;
 
 	if (!mm_init(mm, tsk, mm->user_ns))
@@ -2403,6 +2451,9 @@ __latent_entropy struct task_struct *copy_process(
 	p = dup_task_struct(current, node);
 	if (!p)
 		goto fork_out;
+	retval = sysv_task_fork_init(p);
+	if (retval)
+		goto bad_fork_free;
 	p->flags &= ~PF_KTHREAD;
 	if (args->kthread)
 		p->flags |= PF_KTHREAD;
@@ -2557,7 +2608,6 @@ __latent_entropy struct task_struct *copy_process(
 	if (retval)
 		goto bad_fork_cleanup_perf;
 	/* copy all the process information */
-	shm_init_task(p);
 	retval = security_task_alloc(p, clone_flags);
 	if (retval)
 		goto bad_fork_cleanup_audit;

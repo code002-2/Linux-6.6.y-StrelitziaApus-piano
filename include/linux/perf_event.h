@@ -825,7 +825,9 @@ struct perf_event {
 #endif
 
 #ifdef CONFIG_CGROUP_PERF
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
 	struct perf_cgroup		*cgrp; /* cgroup event is attach to */
+#endif
 #endif
 
 #ifdef CONFIG_SECURITY
@@ -842,6 +844,18 @@ struct perf_event {
 	__u32				orig_type;
 #endif /* CONFIG_PERF_EVENTS */
 };
+
+#if IS_ENABLED(CONFIG_CGROUP_PERF) && \
+	IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT) && !defined(__GENKSYMS__)
+static_assert(offsetof(struct perf_event, rb) -
+	      (offsetof(struct perf_event, mmap_count) + sizeof(atomic_t)) == 4,
+	"Android perf cgroup needs the rb natural hole");
+static_assert(offsetof(struct perf_event, waitq) -
+	      (offsetof(struct perf_event, rcu_pending) + sizeof(int)) == 4,
+	"Android perf cgroup needs the waitq natural hole");
+static_assert(sizeof(struct perf_event) == 1096,
+	"Android perf cgroup extension must preserve struct perf_event");
+#endif
 
 /*
  *           ,-----------------------[1:n]------------------------.
@@ -955,7 +969,9 @@ struct perf_event_context {
 	u64				generation;
 	int				pin_count;
 #ifdef CONFIG_CGROUP_PERF
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
 	int				nr_cgroups;	 /* cgroup evts */
+#endif
 #endif
 	struct rcu_head			rcu_head;
 
@@ -967,6 +983,15 @@ struct perf_event_context {
 	 */
 	local_t				nr_pending;
 };
+
+#if IS_ENABLED(CONFIG_CGROUP_PERF) && \
+	IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT) && !defined(__GENKSYMS__)
+static_assert(offsetof(struct perf_event_context, rcu_head) -
+	      (offsetof(struct perf_event_context, pin_count) + sizeof(int)) == 4,
+	"Android perf cgroup needs the perf context natural hole");
+static_assert(sizeof(struct perf_event_context) == 240,
+	"Android perf cgroup extension must preserve perf_event_context");
+#endif
 
 /*
  * Number of contexts where an event can trigger:
@@ -998,7 +1023,8 @@ struct perf_cpu_context {
 	struct perf_event_context	*task_ctx;
 	int				online;
 
-#ifdef CONFIG_CGROUP_PERF
+#if IS_ENABLED(CONFIG_CGROUP_PERF) && \
+	!IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
 	struct perf_cgroup		*cgrp;
 #endif
 
@@ -1010,6 +1036,18 @@ struct perf_cpu_context {
 	struct perf_event		**heap;
 	struct perf_event		*heap_default[2];
 };
+
+#if IS_ENABLED(CONFIG_CGROUP_PERF) && \
+	IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT) && !defined(__GENKSYMS__)
+static_assert(sizeof(struct mutex) == 48,
+	"Android perf cgroup extension requires the frozen mutex layout");
+static_assert(offsetof(struct mutex, android_oem_data1) == 32,
+	"Android perf cgroup extension requires mutex OEM storage");
+static_assert(sizeof_field(struct mutex, android_oem_data1) >= 2 * sizeof(u64),
+	"Android perf cgroup extension requires mutex OEM storage slot 1");
+static_assert(sizeof(struct perf_cpu_context) == 280,
+	"Android perf cgroup extension must preserve perf_cpu_context");
+#endif
 
 struct perf_output_handle {
 	struct perf_event		*event;
@@ -1043,11 +1081,26 @@ struct perf_cgroup_info {
 	int				active;
 };
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+struct perf_cgroup {
+	/* The cgroup KMI sidecar owns this state for the cgroup lifetime. */
+	struct cgroup			*cgroup;
+	struct perf_cgroup_info	__percpu *info;
+};
+#else
 struct perf_cgroup {
 	struct cgroup_subsys_state	css;
 	struct perf_cgroup_info	__percpu *info;
 };
-
+#endif
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+struct perf_cgroup *
+perf_cgroup_from_task(struct task_struct *task, struct perf_event_context *ctx);
+int android_perf_cgroup_alloc(struct cgroup *cgrp);
+void android_perf_cgroup_free(struct cgroup *cgrp);
+void android_perf_cgroup_migrate_task(struct task_struct *task);
+void android_perf_cgroup_online(struct cgroup *cgrp);
+#else
 /*
  * Must ensure cgroup is pinned (css_get) before calling
  * this function. In other words, we cannot call this function
@@ -1061,6 +1114,7 @@ perf_cgroup_from_task(struct task_struct *task, struct perf_event_context *ctx)
 					       : true),
 			    struct perf_cgroup, css);
 }
+#endif
 #endif /* CONFIG_CGROUP_PERF */
 
 #ifdef CONFIG_PERF_EVENTS

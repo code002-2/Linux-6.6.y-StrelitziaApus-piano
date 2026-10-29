@@ -191,9 +191,19 @@ config MACVTAP
 	  To compile this driver as a module, choose M here: the module
 	  will be called macvtap.
 
+config ANDROID_IPVLAN_KMI_EXT
+	def_bool y
+	depends on IPVLAN && ANDROID_KABI_RESERVE
+	help
+	  Keep the Docker IPvlan L2 and L3 modes without enabling the L3S mode.
+	  L3S selects NET_L3_MASTER_DEV, which changes frozen Android GKI
+	  net_device and network namespace layouts. This is selected
+	  automatically so an Android KABI configuration cannot enable L3S.
+
 config IPVLAN_L3S
 	depends on NETFILTER
 	depends on IPVLAN
+	depends on !ANDROID_KABI_RESERVE
 	def_bool y
 	select NET_L3_MASTER_DEV
 

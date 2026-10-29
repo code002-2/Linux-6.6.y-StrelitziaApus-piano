@@ -15,6 +15,25 @@
 #include <net/inet_sock.h>
 
 #ifdef CONFIG_CGROUP_NET_CLASSID
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
+static inline u32 task_cls_classid(struct task_struct *p)
+{
+	if (in_interrupt())
+		return 0;
+
+	return android_cgroup_net_cls_task_classid(p);
+}
+
+static inline u32 __task_get_classid(struct task_struct *task)
+{
+	return android_cgroup_net_cls_task_classid(task);
+}
+
+static inline void sock_update_classid(struct sock_cgroup_data *skcd)
+{
+	sock_cgroup_set_classid(skcd, task_cls_classid(current));
+}
+#else
 struct cgroup_cls_state {
 	struct cgroup_subsys_state css;
 	u32 classid;
@@ -49,6 +68,7 @@ static inline u32 __task_get_classid(struct task_struct *task)
 {
 	return task_cls_state(task)->classid;
 }
+#endif
 
 static inline u32 task_get_classid(const struct sk_buff *skb)
 {

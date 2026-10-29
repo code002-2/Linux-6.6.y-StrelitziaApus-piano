@@ -39,6 +39,17 @@ menuconfig IP_SCTP
 
 if IP_SCTP
 
+config ANDROID_SCTP_KMI_EXT
+	def_bool y
+	depends on ANDROID_KABI_RESERVE
+	depends on ARM64 && !CPU_BIG_ENDIAN
+	depends on ANDROID_BRIDGE_NETFILTER_KMI_EXT
+	depends on NET_TC_SKB_EXT = n && MPTCP = n && MCTP_FLOWS = n
+	help
+	  Keep SCTP's per-network-namespace state out of the frozen Android GKI
+	  struct net and store its CRC32c offload marker in a private skb extension
+	  slot.
+
 config SCTP_DBG_OBJCNT
 	bool "SCTP: Debug object counts"
 	depends on PROC_FS

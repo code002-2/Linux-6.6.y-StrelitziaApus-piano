@@ -552,10 +552,18 @@ merge:
 		sh->checksum = sctp_compute_cksum(head, 0);
 	} else {
 chksum:
-		head->ip_summed = CHECKSUM_PARTIAL;
-		head->csum_not_inet = 1;
-		head->csum_start = skb_transport_header(head) - head->head;
-		head->csum_offset = offsetof(struct sctphdr, checksum);
+		/* GSO was marked before packet packing; do not allocate again. */
+		if (gso || skb_set_csum_not_inet(head)) {
+			head->ip_summed = CHECKSUM_PARTIAL;
+			head->csum_start = skb_transport_header(head) - head->head;
+			head->csum_offset = offsetof(struct sctphdr, checksum);
+		} else {
+			struct sctphdr *sh =
+				(struct sctphdr *)skb_transport_header(head);
+
+			head->ip_summed = CHECKSUM_NONE;
+			sh->checksum = sctp_compute_cksum(head, 0);
+		}
 	}
 
 	return pkt_count;
@@ -594,7 +602,8 @@ int sctp_packet_transmit(struct sctp_packet *packet, gfp_t gfp)
 		}
 	}
 
-	/* alloc head skb */
+	/* Allocate the head before reserving the SCTP CRC32c extension. */
+retry_alloc_head:
 	head = alloc_skb((gso ? packet->overhead : packet->size) +
 			 MAX_HEADER, gfp);
 	if (!head)
@@ -609,6 +618,19 @@ int sctp_packet_transmit(struct sctp_packet *packet, gfp_t gfp)
 	sh->dest = htons(packet->destination_port);
 	sh->vtag = htonl(packet->vtag);
 	sh->checksum = 0;
+
+	/*
+	 * A GSO packet needs a persistent SCTP CRC32c marker until it is split.
+	 * If the private extension cannot be allocated, fall back before packing
+	 * any chunks: use software CRC32c with IP fragmentation rather than leave
+	 * a CHECKSUM_PARTIAL packet that a device will interpret as an IP checksum.
+	 */
+	if (gso && !skb_set_csum_not_inet(head)) {
+		kfree_skb(head);
+		packet->ipfragok = 1;
+		gso = 0;
+		goto retry_alloc_head;
+	}
 
 	/* drop packet if no dst */
 	if (!tp->dst) {

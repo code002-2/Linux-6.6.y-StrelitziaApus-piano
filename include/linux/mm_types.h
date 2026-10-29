@@ -975,7 +975,7 @@ struct mm_struct {
 #ifdef CONFIG_PREEMPT_RT
 		struct rcu_head delayed_drop;
 #endif
-#ifdef CONFIG_HUGETLB_PAGE
+#if defined(CONFIG_HUGETLB_PAGE) && !defined(CONFIG_ANDROID_HUGETLB_KMI_EXT)
 		atomic_long_t hugetlb_usage;
 #endif
 		struct work_struct async_put_work;

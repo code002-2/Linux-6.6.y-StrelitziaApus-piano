@@ -9,6 +9,8 @@ This module contains a full list of kernel modules
 # LINT.IfChange
 _COMMON_GKI_MODULES_LIST = [
     # keep sorted
+    "crypto/xxhash_generic.ko",
+    "crypto/xor.ko",
     "drivers/block/virtio_blk.ko",
     "drivers/block/zram/zram.ko",
     "drivers/bluetooth/btbcm.ko",
@@ -52,8 +54,10 @@ _COMMON_GKI_MODULES_LIST = [
     "drivers/virtio/virtio_pci.ko",
     "drivers/virtio/virtio_pci_legacy_dev.ko",
     "drivers/virtio/virtio_pci_modern_dev.ko",
+    "fs/btrfs/btrfs.ko",
     "kernel/kheaders.ko",
     "lib/crypto/libarc4.ko",
+    "lib/raid6/raid6_pq.ko",
     "mm/zsmalloc.ko",
     "net/6lowpan/6lowpan.ko",
     "net/6lowpan/nhc_dest.ko",
@@ -76,11 +80,21 @@ _COMMON_GKI_MODULES_LIST = [
     "net/ieee802154/6lowpan/ieee802154_6lowpan.ko",
     "net/ieee802154/ieee802154.ko",
     "net/ieee802154/ieee802154_socket.ko",
+    "net/ipv4/netfilter/nft_fib_ipv4.ko",
+    "net/ipv6/netfilter/nft_fib_ipv6.ko",
     "net/l2tp/l2tp_core.ko",
     "net/l2tp/l2tp_ppp.ko",
     "net/mac802154/mac802154.ko",
+    "net/netfilter/nf_tables.ko",
+    "net/netfilter/nft_chain_nat.ko",
+    "net/netfilter/nft_ct.ko",
+    "net/netfilter/nft_fib.ko",
+    "net/netfilter/nft_masq.ko",
+    "net/netfilter/nft_nat.ko",
     "net/nfc/nfc.ko",
     "net/rfkill/rfkill.ko",
+    "net/sctp/sctp.ko",
+    "net/sctp/sctp_diag.ko",
     "net/tipc/diag.ko",
     "net/tipc/tipc.ko",
     "net/vmw_vsock/vmw_vsock_virtio_transport.ko",
@@ -97,9 +111,13 @@ _ARM_GKI_MODULES_LIST = [
 _ARM64_GKI_MODULES_LIST = [
     # keep sorted
     "arch/arm64/geniezone/gzvm.ko",
+    "arch/arm64/lib/xor-neon.ko",
     "drivers/char/hw_random/cctrng.ko",
     "drivers/misc/open-dice.ko",
     "drivers/ptp/ptp_kvm.ko",
+    "net/netfilter/ipvs/ip_vs.ko",
+    "net/netfilter/ipvs/ip_vs_rr.ko",
+    "net/netfilter/xt_ipvs.ko",
 ]
 # LINT.ThenChange(android/abi_gki_protected_exports_aarch64)
 

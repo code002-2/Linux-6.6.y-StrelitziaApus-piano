@@ -16,6 +16,7 @@
 #include <linux/list.h>
 #include <linux/eventpoll.h>
 #include <linux/file.h>
+#include <linux/sem.h>
 
 #include <asm/unistd.h>
 
@@ -196,9 +197,14 @@ SYSCALL_DEFINE5(kcmp, pid_t, pid1, pid_t, pid2, int, type,
 		break;
 	case KCMP_SYSVSEM:
 #ifdef CONFIG_SYSVIPC
-		ret = kcmp_ptr(task1->sysvsem.undo_list,
-			       task2->sysvsem.undo_list,
-			       KCMP_SYSVSEM);
+		{
+			struct sysv_sem *sem1 = sysv_task_sem(task1);
+			struct sysv_sem *sem2 = sysv_task_sem(task2);
+
+			ret = kcmp_ptr(sem1 ? sem1->undo_list : NULL,
+				       sem2 ? sem2->undo_list : NULL,
+				       KCMP_SYSVSEM);
+		}
 #else
 		ret = -EOPNOTSUPP;
 #endif

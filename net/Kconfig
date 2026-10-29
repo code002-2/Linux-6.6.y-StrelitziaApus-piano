@@ -226,6 +226,19 @@ config BRIDGE_NETFILTER
 
 	  If unsure, say N.
 
+config ANDROID_BRIDGE_NETFILTER_KMI_EXT
+	def_bool y
+	depends on BRIDGE_NETFILTER = y && ANDROID_KABI_RESERVE
+	depends on ARM64 && !CPU_BIG_ENDIAN
+	depends on XFRM = y
+	depends on NET_TC_SKB_EXT = n && MPTCP = n && MCTP_FLOWS = n
+	help
+	  Keep bridge netfilter metadata in a private skb extension slot without
+	  changing the frozen Android GKI skb_ext_id enum or struct skb_ext.
+	  This is intentionally fail-closed for the 6.6 arm64 GKI extension
+	  profile; a configuration which adds another native skb extension must
+	  use a separately reviewed layout.
+
 source "net/netfilter/Kconfig"
 source "net/ipv4/netfilter/Kconfig"
 source "net/ipv6/netfilter/Kconfig"

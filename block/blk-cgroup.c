@@ -63,6 +63,94 @@ static DEFINE_RAW_SPINLOCK(blkg_stat_lock);
 
 #define BLKG_DESTROY_BATCH_SIZE  64
 
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO) && \
+	IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
+/*
+ * The frozen Android GKI layout has two 4-byte alignment holes in blkcg_gq,
+ * but no contiguous pointer-sized slot.  Keep the punt-bio state out of line
+ * and use those holes solely for the sidecar address.
+ */
+struct android_blkcg_punt_bio_ext {
+	struct blkcg_gq		*blkg;
+	spinlock_t		async_bio_lock;
+	struct bio_list		async_bios;
+	struct work_struct	async_bio_work;
+};
+
+static u32 blkg_punt_bio_ext_slot_read(const struct blkcg_gq *blkg,
+				       unsigned int offset)
+{
+	return READ_ONCE(*(const u32 *)((const char *)blkg + offset));
+}
+
+static void blkg_punt_bio_ext_slot_write(struct blkcg_gq *blkg,
+					 unsigned int offset, u32 value)
+{
+	WRITE_ONCE(*(u32 *)((char *)blkg + offset), value);
+}
+
+static struct android_blkcg_punt_bio_ext *
+blkg_punt_bio_ext(const struct blkcg_gq *blkg)
+{
+	u64 addr;
+
+	addr = blkg_punt_bio_ext_slot_read(blkg,
+					  ANDROID_BLKCG_PUNT_BIO_EXT_LO_OFFSET);
+	addr |= (u64)blkg_punt_bio_ext_slot_read(blkg,
+					       ANDROID_BLKCG_PUNT_BIO_EXT_HI_OFFSET) << 32;
+	return (struct android_blkcg_punt_bio_ext *)(unsigned long)addr;
+}
+
+static void blkg_punt_bio_ext_set(struct blkcg_gq *blkg,
+				  struct android_blkcg_punt_bio_ext *ext)
+{
+	u64 addr = (unsigned long)ext;
+
+	blkg_punt_bio_ext_slot_write(blkg, ANDROID_BLKCG_PUNT_BIO_EXT_LO_OFFSET,
+				     lower_32_bits(addr));
+	blkg_punt_bio_ext_slot_write(blkg, ANDROID_BLKCG_PUNT_BIO_EXT_HI_OFFSET,
+				     upper_32_bits(addr));
+}
+
+static void blkg_punt_bio_ext_free(struct blkcg_gq *blkg)
+{
+	struct android_blkcg_punt_bio_ext *ext = blkg_punt_bio_ext(blkg);
+
+	blkg_punt_bio_ext_set(blkg, NULL);
+	kfree(ext);
+}
+
+static inline spinlock_t *blkg_async_bio_lock(struct blkcg_gq *blkg)
+{
+	return &blkg_punt_bio_ext(blkg)->async_bio_lock;
+}
+
+static inline struct bio_list *blkg_async_bios(struct blkcg_gq *blkg)
+{
+	return &blkg_punt_bio_ext(blkg)->async_bios;
+}
+
+static inline struct work_struct *blkg_async_bio_work(struct blkcg_gq *blkg)
+{
+	return &blkg_punt_bio_ext(blkg)->async_bio_work;
+}
+#elif IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO)
+static inline spinlock_t *blkg_async_bio_lock(struct blkcg_gq *blkg)
+{
+	return &blkg->async_bio_lock;
+}
+
+static inline struct bio_list *blkg_async_bios(struct blkcg_gq *blkg)
+{
+	return &blkg->async_bios;
+}
+
+static inline struct work_struct *blkg_async_bio_work(struct blkcg_gq *blkg)
+{
+	return &blkg->async_bio_work;
+}
+#endif
+
 /*
  * Lockless lists for tracking IO stats update
  *
@@ -145,6 +233,10 @@ static void blkg_free_workfn(struct work_struct *work)
 	blk_put_queue(q);
 	free_percpu(blkg->iostat_cpu);
 	percpu_ref_exit(&blkg->refcnt);
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO) && \
+	IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
+	blkg_punt_bio_ext_free(blkg);
+#endif
 	kfree(blkg);
 }
 
@@ -171,8 +263,8 @@ static void __blkg_release(struct rcu_head *rcu)
 {
 	struct blkcg_gq *blkg = container_of(rcu, struct blkcg_gq, rcu_head);
 
-#ifdef CONFIG_BLK_CGROUP_PUNT_BIO
-	WARN_ON(!bio_list_empty(&blkg->async_bios));
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO)
+	WARN_ON(!bio_list_empty(blkg_async_bios(blkg)));
 #endif
 
 	/* release the blkcg and parent blkg refs this blkg has been holding */
@@ -206,23 +298,30 @@ static void blkg_release(struct percpu_ref *ref)
 	call_rcu(&blkg->rcu_head, __blkg_release);
 }
 
-#ifdef CONFIG_BLK_CGROUP_PUNT_BIO
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO)
 static struct workqueue_struct *blkcg_punt_bio_wq;
 
 static void blkg_async_bio_workfn(struct work_struct *work)
 {
+#if IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
+	struct android_blkcg_punt_bio_ext *ext =
+		container_of(work, struct android_blkcg_punt_bio_ext,
+			     async_bio_work);
+	struct blkcg_gq *blkg = ext->blkg;
+#else
 	struct blkcg_gq *blkg = container_of(work, struct blkcg_gq,
 					     async_bio_work);
+#endif
 	struct bio_list bios = BIO_EMPTY_LIST;
 	struct bio *bio;
 	struct blk_plug plug;
 	bool need_plug = false;
 
 	/* as long as there are pending bios, @blkg can't go away */
-	spin_lock(&blkg->async_bio_lock);
-	bio_list_merge(&bios, &blkg->async_bios);
-	bio_list_init(&blkg->async_bios);
-	spin_unlock(&blkg->async_bio_lock);
+	spin_lock(blkg_async_bio_lock(blkg));
+	bio_list_merge(&bios, blkg_async_bios(blkg));
+	bio_list_init(blkg_async_bios(blkg));
+	spin_unlock(blkg_async_bio_lock(blkg));
 
 	/* start plug only when bio_list contains at least 2 bios */
 	if (bios.head && bios.head->bi_next) {
@@ -246,16 +345,18 @@ void blkcg_punt_bio_submit(struct bio *bio)
 	struct blkcg_gq *blkg = bio->bi_blkg;
 
 	if (blkg->parent) {
-		spin_lock(&blkg->async_bio_lock);
-		bio_list_add(&blkg->async_bios, bio);
-		spin_unlock(&blkg->async_bio_lock);
-		queue_work(blkcg_punt_bio_wq, &blkg->async_bio_work);
+		spin_lock(blkg_async_bio_lock(blkg));
+		bio_list_add(blkg_async_bios(blkg), bio);
+		spin_unlock(blkg_async_bio_lock(blkg));
+		queue_work(blkcg_punt_bio_wq, blkg_async_bio_work(blkg));
 	} else {
 		/* never bounce for the root cgroup */
 		submit_bio(bio);
 	}
 }
+#if !IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
 EXPORT_SYMBOL_GPL(blkcg_punt_bio_submit);
+#endif
 
 static int __init blkcg_punt_bio_init(void)
 {
@@ -314,6 +415,21 @@ static struct blkcg_gq *blkg_alloc(struct blkcg *blkcg, struct gendisk *disk,
 	blkg = kzalloc_node(sizeof(*blkg), gfp_mask, disk->queue->node);
 	if (!blkg)
 		return NULL;
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO) && \
+	IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
+	{
+		struct android_blkcg_punt_bio_ext *ext;
+
+		ext = kzalloc_node(sizeof(*ext), gfp_mask, disk->queue->node);
+		if (!ext)
+			goto out_free_blkg;
+		ext->blkg = blkg;
+		spin_lock_init(&ext->async_bio_lock);
+		bio_list_init(&ext->async_bios);
+		INIT_WORK(&ext->async_bio_work, blkg_async_bio_workfn);
+		blkg_punt_bio_ext_set(blkg, ext);
+	}
+#endif
 	if (percpu_ref_init(&blkg->refcnt, blkg_release, 0, gfp_mask))
 		goto out_free_blkg;
 	blkg->iostat_cpu = alloc_percpu_gfp(struct blkg_iostat_set, gfp_mask);
@@ -326,7 +442,8 @@ static struct blkcg_gq *blkg_alloc(struct blkcg *blkcg, struct gendisk *disk,
 	INIT_LIST_HEAD(&blkg->q_node);
 	blkg->blkcg = blkcg;
 	blkg->iostat.blkg = blkg;
-#ifdef CONFIG_BLK_CGROUP_PUNT_BIO
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO) && \
+	!IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
 	spin_lock_init(&blkg->async_bio_lock);
 	bio_list_init(&blkg->async_bios);
 	INIT_WORK(&blkg->async_bio_work, blkg_async_bio_workfn);
@@ -367,6 +484,10 @@ out_free_iostat:
 out_exit_refcnt:
 	percpu_ref_exit(&blkg->refcnt);
 out_free_blkg:
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO) && \
+	IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
+	blkg_punt_bio_ext_free(blkg);
+#endif
 	kfree(blkg);
 	return NULL;
 }
@@ -439,15 +560,15 @@ static struct blkcg_gq *blkg_create(struct blkcg *blkcg, struct gendisk *disk,
 				blkg->pd[i]->online = true;
 			}
 		}
+		blkg->online = true;
 	}
-	blkg->online = true;
 	spin_unlock(&blkcg->lock);
 
 	if (!ret)
 		return blkg;
 
 	/* @blkg failed fully initialized, use the usual release path */
-	blkg_put(blkg);
+	percpu_ref_kill(&blkg->refcnt);
 	return ERR_PTR(ret);
 
 err_put_css:
@@ -1201,13 +1322,10 @@ static int blkcg_print_stat(struct seq_file *sf, void *v)
 	else
 		cgroup_rstat_flush(blkcg->css.cgroup);
 
-	rcu_read_lock();
-	hlist_for_each_entry_rcu(blkg, &blkcg->blkg_list, blkcg_node) {
-		spin_lock_irq(&blkg->q->queue_lock);
+	guard(spinlock_irq)(&blkcg->lock);
+	hlist_for_each_entry(blkg, &blkcg->blkg_list, blkcg_node)
 		blkcg_print_one_stat(blkg, sf);
-		spin_unlock_irq(&blkg->q->queue_lock);
-	}
-	rcu_read_unlock();
+
 	return 0;
 }
 
@@ -1585,6 +1703,8 @@ int blkcg_activate_policy(struct gendisk *disk, const struct blkcg_policy *pol)
 
 	if (queue_is_mq(q))
 		blk_mq_freeze_queue(q);
+
+	mutex_lock(&q->blkcg_mutex);
 retry:
 	spin_lock_irq(&q->queue_lock);
 
@@ -1593,6 +1713,8 @@ retry:
 		struct blkg_policy_data *pd;
 
 		if (blkg->pd[pol->plid])
+			continue;
+		if (hlist_unhashed(&blkg->blkcg_node))
 			continue;
 
 		/* If prealloc matches, use it; otherwise try GFP_NOWAIT */
@@ -1647,6 +1769,7 @@ retry:
 
 	spin_unlock_irq(&q->queue_lock);
 out:
+	mutex_unlock(&q->blkcg_mutex);
 	if (queue_is_mq(q))
 		blk_mq_unfreeze_queue(q);
 	if (pinned_blkg)
@@ -2206,7 +2329,7 @@ void blk_cgroup_bio_start(struct bio *bio)
 	}
 
 	u64_stats_update_end_irqrestore(&bis->sync, flags);
-	cgroup_rstat_updated(blkcg->css.cgroup, cpu);
+	__cgroup_rstat_updated(blkcg->css.cgroup, cpu);
 	put_cpu();
 }
 

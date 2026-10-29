@@ -419,7 +419,7 @@ void *perf_trace_buf_alloc(int size, struct pt_regs **regs, int *rctxp)
 	memset(&raw_data[size - sizeof(u64)], 0, sizeof(u64));
 	return raw_data;
 }
-EXPORT_SYMBOL_GPL(perf_trace_buf_alloc);
+EXPORT_SYMBOL(perf_trace_buf_alloc);  /* code002: 放开给 ZFS 模块 */
 NOKPROBE_SYMBOL(perf_trace_buf_alloc);
 
 void perf_trace_buf_update(void *record, u16 type)
@@ -497,7 +497,17 @@ static int perf_ftrace_function_register(struct perf_event *event)
 static int perf_ftrace_function_unregister(struct perf_event *event)
 {
 	struct ftrace_ops *ops = &event->ftrace_ops;
-	int ret = unregister_ftrace_function(ops);
+	int ret = 0;
+
+	/*
+	 * Perf will call this unconditionally even if the ops is not
+	 * enabled. The unregister_ftrace_function() will warn if called
+	 * when not enabled. Just bypass the unregistering if ops isn't
+	 * enabled here.
+	 */
+	if (ops->flags & FTRACE_OPS_FL_ENABLED)
+		ret = unregister_ftrace_function(ops);
+
 	ftrace_free_filter(ops);
 	return ret;
 }
