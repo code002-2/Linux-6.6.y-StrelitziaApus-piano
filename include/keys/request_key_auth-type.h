@@ -22,7 +22,7 @@ struct request_key_auth {
 	const struct cred	*cred;
 	void			*callout_info;
 	size_t			callout_len;
-	struct pid		*pid;
+	pid_t			pid;
 	char			op[8];
 } __randomize_layout;
 
