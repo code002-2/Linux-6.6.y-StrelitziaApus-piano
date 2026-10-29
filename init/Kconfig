@@ -1019,6 +1019,14 @@ config CFS_BANDWIDTH
 	  restriction.
 	  See Documentation/scheduler/sched-bwc.rst for more information.
 
+config ANDROID_CFS_BANDWIDTH_KMI_EXT
+	bool "KMI-safe CFS bandwidth storage"
+	depends on CFS_BANDWIDTH && 64BIT && SMP && ANDROID_KABI_RESERVE
+	help
+	  Stores CFS bandwidth state outside the frozen Android GKI scheduler
+	  structures. This preserves the layout of task_group, cfs_rq, and rq
+	  while retaining the cgroup v2 cpu.max interface.
+
 config RT_GROUP_SCHED
 	bool "Group scheduling for SCHED_RR/FIFO"
 	depends on CGROUP_SCHED
@@ -1074,6 +1082,15 @@ config CGROUP_PIDS
 	  since the PIDs limit only affects a process's ability to fork, not to
 	  attach to a cgroup.
 
+config ANDROID_CGROUP_PIDS_KMI_EXT
+	bool "KMI-safe cgroup v2 PIDs controller"
+	depends on CGROUP_PIDS
+	help
+	  Replaces the native PIDs cgroup subsystem with an Android GKI
+	  KMI-preserving implementation. It keeps pids.max and pids.current on
+	  cgroup v2 without adding a cgroup subsystem ID or expanding the frozen
+	  css_set and cgroup arrays.
+
 config CGROUP_RDMA
 	bool "RDMA controller"
 	help
@@ -1111,6 +1128,15 @@ config CGROUP_HUGETLB
 	  control group is tracked in the third page lru pointer. This means
 	  that we cannot use the controller with huge page less than 3 pages.
 
+config ANDROID_CGROUP_HUGETLB_KMI_EXT
+	def_bool y
+	depends on CGROUP_HUGETLB && ANDROID_HUGETLB_KMI_EXT
+	depends on ANDROID_KABI_RESERVE && ARM64 && 64BIT && !CPU_BIG_ENDIAN
+	help
+	  Keep the cgroup v2 HugeTLB controller outside the frozen Android GKI
+	  cgroup subsystem arrays.  Accounting state is held in a private
+	  sidecar and the controller is represented by a virtual cgroup v2 bit.
+
 config CPUSETS
 	bool "Cpuset controller"
 	depends on SMP
@@ -1133,6 +1159,14 @@ config CGROUP_DEVICE
 	  Provides a cgroup controller implementing whitelists for
 	  devices which a process in the cgroup can mknod or open.
 
+config ANDROID_CGROUP_DEVICE_BPF_KMI_EXT
+	bool "KMI-safe cgroup v2 device controller"
+	depends on CGROUP_DEVICE && CGROUP_BPF
+	help
+	  Keeps cgroup v2 device access control on the existing BPF cgroup hook
+	  without registering the legacy v1 devices subsystem. This preserves the
+	  frozen Android GKI cgroup subsystem array layout.
+
 config CGROUP_CPUACCT
 	bool "Simple CPU accounting controller"
 	help
@@ -1149,6 +1183,30 @@ config CGROUP_PERF
 	  so that it can monitor performance events among cgroups.
 
 	  Say N if unsure.
+
+config ANDROID_CGROUP_PERF_KMI_EXT
+	def_bool y
+	depends on CGROUP_PERF && ANDROID_KABI_RESERVE
+	depends on ANDROID_VENDOR_OEM_DATA
+	depends on ARM64 && 64BIT && SMP
+	depends on BPF_SYSCALL && EVENT_TRACING && SECURITY
+	depends on !FUNCTION_TRACER
+	help
+	  Keep the perf cgroup implementation outside the frozen Android GKI
+	  cgroup subsystem arrays and perf context layouts.  The implementation
+	  uses existing perf_event holes and the cgroup KMI sidecar while retaining
+	  cgroup v2 PERF_FLAG_PID_CGROUP filtering semantics.
+
+config ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	def_bool y
+	depends on CGROUP_NET_CLASSID && CGROUP_NET_PRIO
+	depends on ANDROID_KABI_RESERVE
+	depends on ARM64 && 64BIT
+	help
+	  Keep network classid state outside the frozen Android GKI cgroup
+	  subsystem arrays. The implementation uses the existing cgroup KMI
+	  sidecar and sock_cgroup_data tail padding while retaining net_cls
+	  cgroup functionality.
 
 config CGROUP_BPF
 	bool "Support for eBPF programs attached to cgroups"

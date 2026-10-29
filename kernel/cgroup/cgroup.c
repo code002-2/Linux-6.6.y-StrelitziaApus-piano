@@ -47,6 +47,7 @@
 #include <linux/spinlock.h>
 #include <linux/percpu-rwsem.h>
 #include <linux/string.h>
+#include <linux/threads.h>
 #include <linux/hashtable.h>
 #include <linux/idr.h>
 #include <linux/kthread.h>
@@ -59,6 +60,9 @@
 #include <linux/sched/cputime.h>
 #include <linux/sched/deadline.h>
 #include <linux/psi.h>
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+#include <linux/perf_event.h>
+#endif
 #include <net/sock.h>
 
 #define CREATE_TRACE_POINTS
@@ -71,6 +75,354 @@
 					 MAX_CFTYPE_NAME + 2)
 /* let's not notify more than 100 times per second */
 #define CGROUP_FILE_NOTIFY_MIN_INTV	DIV_ROUND_UP(HZ, 100)
+
+bool cgroup_on_dfl(const struct cgroup *cgrp);
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+#define ANDROID_CGROUP_HUGETLB_BIT	((u16)BIT(13))
+
+struct hugetlb_cgroup;
+
+struct hugetlb_cgroup *android_hugetlb_cgroup_alloc(struct cgroup *cgrp);
+void android_hugetlb_cgroup_free(struct hugetlb_cgroup *h_cg);
+void android_hugetlb_cgroup_offline(struct hugetlb_cgroup *h_cg);
+int android_hugetlb_cgroup_sync_files(struct cgroup *cgrp);
+void android_hugetlb_cgroup_remove_files(struct cgroup *cgrp);
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+#define ANDROID_CGROUP_PIDS_BIT	((u16)BIT(15))
+#define ANDROID_CGROUP_PIDS_MAX	((s64)PID_MAX_LIMIT + 1)
+
+struct android_cgroup_pids_state {
+	atomic64_t count;
+	atomic64_t limit;
+	atomic64_t peak;
+	atomic64_t events_limit;
+};
+#endif
+
+/* Keep the published KMI extension type unchanged. */
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+struct android_cgroup_kmi_ext {
+	struct cgroup_kmi_ext_info info;
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	struct android_cgroup_pids_state pids;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	struct hugetlb_cgroup *hugetlb;
+	struct cgroup *hugetlb_cgrp;
+	struct work_struct hugetlb_offline_work;
+	bool hugetlb_offline_pending;
+	bool hugetlb_offline_done;
+	bool hugetlb_offline_parent_waiting;
+	unsigned int hugetlb_offline_children;
+#endif
+};
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+static void android_hugetlb_cgroup_offline_workfn(struct work_struct *work);
+static void android_hugetlb_cgroup_track_dying_children(struct cgroup *cgrp);
+#endif
+
+static int android_cgroup_kmi_ext_alloc(struct cgroup *cgrp)
+{
+	struct android_cgroup_kmi_ext *ext;
+
+	ext = kzalloc(sizeof(*ext), GFP_KERNEL);
+	if (!ext)
+		return -ENOMEM;
+
+	cgrp->kmi_ext_info = &ext->info;
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	atomic64_set(&ext->pids.limit, ANDROID_CGROUP_PIDS_MAX);
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	ext->hugetlb_cgrp = cgrp;
+	INIT_WORK(&ext->hugetlb_offline_work,
+		  android_hugetlb_cgroup_offline_workfn);
+	if (cgroup_on_dfl(cgrp)) {
+		ext->hugetlb = android_hugetlb_cgroup_alloc(cgrp);
+		if (IS_ERR(ext->hugetlb)) {
+			int ret = PTR_ERR(ext->hugetlb);
+
+			cgrp->kmi_ext_info = NULL;
+			kfree(ext);
+			return ret;
+		}
+	}
+#endif
+	return 0;
+}
+
+static void android_cgroup_kmi_ext_free(struct cgroup *cgrp)
+{
+	struct android_cgroup_kmi_ext *ext;
+
+	if (!cgrp->kmi_ext_info)
+		return;
+
+	ext = container_of(cgrp->kmi_ext_info, struct android_cgroup_kmi_ext,
+			   info);
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	cancel_work_sync(&ext->hugetlb_offline_work);
+	android_hugetlb_cgroup_free(ext->hugetlb);
+#endif
+	cgrp->kmi_ext_info = NULL;
+	kfree(ext);
+}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+/*
+ * cgroup_kmi_ext_info is part of the published KMI.  The four bytes after
+ * freezer.freeze_seq are natural padding in the frozen arm64 layout, so keep
+ * the type unchanged and use that slot for the virtual net_cls controller.
+ */
+#define ANDROID_CGROUP_NET_CLS_INFO_OFFSET \
+	(offsetof(struct cgroup_kmi_ext_info, freezer.freeze_seq) + \
+	 sizeof(seqcount_t))
+
+static_assert(ANDROID_CGROUP_NET_CLS_INFO_OFFSET == sizeof(u32),
+	"Android net_cls must use the cgroup KMI extension padding");
+static_assert(offsetof(struct cgroup_kmi_ext_info,
+		       freezer.freeze_start_nsec) ==
+	      ANDROID_CGROUP_NET_CLS_INFO_OFFSET + sizeof(u32),
+	"Android net_cls must not overlap freezer metadata");
+static_assert(sizeof(struct cgroup_kmi_ext_info) == 24,
+	"Android net_cls must preserve cgroup_kmi_ext_info");
+
+static __always_inline u32 *android_cgroup_net_cls_slot(
+					struct cgroup_kmi_ext_info *info)
+{
+	return (u32 *)((char *)info + ANDROID_CGROUP_NET_CLS_INFO_OFFSET);
+}
+
+u32 android_cgroup_net_cls_get_classid(const struct cgroup *cgrp)
+{
+	const struct cgroup_kmi_ext_info *info;
+
+	if (!cgrp)
+		return 0;
+
+	info = READ_ONCE(cgrp->kmi_ext_info);
+	if (!info)
+		return 0;
+
+	return READ_ONCE(*(const u32 *)((const char *)info +
+					ANDROID_CGROUP_NET_CLS_INFO_OFFSET));
+}
+
+int android_cgroup_net_cls_set_classid(struct cgroup *cgrp, u32 classid)
+{
+	struct cgroup_kmi_ext_info *info;
+
+	if (!cgrp)
+		return -ENODEV;
+
+	info = READ_ONCE(cgrp->kmi_ext_info);
+	if (!info)
+		return -ENODEV;
+
+	WRITE_ONCE(*android_cgroup_net_cls_slot(info), classid);
+	return 0;
+}
+
+void android_cgroup_net_cls_inherit(struct cgroup *cgrp,
+				    const struct cgroup *parent)
+{
+	if (!parent)
+		return;
+
+	android_cgroup_net_cls_set_classid(cgrp,
+					   android_cgroup_net_cls_get_classid(parent));
+}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+/*
+ * These offsets are natural padding in the frozen arm64 GKI cgroup layout.
+ * Publish the high word last so readers either observe no sidecar or a fully
+ * initialized pointer.  The cgroup reference held by a perf event keeps the
+ * sidecar alive until the final cgroup RCU free path clears it.
+ */
+#define ANDROID_CGROUP_PERF_LO_OFFSET \
+	(offsetof(struct cgroup, nr_threaded_children) + sizeof(int))
+#define ANDROID_CGROUP_PERF_HI_OFFSET \
+	(offsetof(struct cgroup, bpf_cgrp_storage) - sizeof(u32))
+
+static_assert(offsetof(struct cgroup, kn) -
+	      (offsetof(struct cgroup, nr_threaded_children) + sizeof(int)) ==
+	      sizeof(u32),
+	"Android perf cgroup needs the first cgroup natural hole");
+static_assert(offsetof(struct cgroup, bpf_cgrp_storage) -
+	      (offsetof(struct cgroup, freezer) +
+	       sizeof(struct cgroup_freezer_state)) == sizeof(u32),
+	"Android perf cgroup needs the second cgroup natural hole");
+static_assert(sizeof(struct cgroup) == 1920,
+	"Android perf cgroup extension must preserve struct cgroup");
+
+static __always_inline u32 *android_cgroup_perf_lo_slot(struct cgroup *cgrp)
+{
+	return (u32 *)((char *)cgrp + ANDROID_CGROUP_PERF_LO_OFFSET);
+}
+
+static __always_inline u32 *android_cgroup_perf_hi_slot(struct cgroup *cgrp)
+{
+	return (u32 *)((char *)cgrp + ANDROID_CGROUP_PERF_HI_OFFSET);
+}
+
+struct perf_cgroup *android_cgroup_perf_kmi_get(struct cgroup *cgrp)
+{
+	u64 value;
+	u32 high, low;
+
+	if (!cgrp)
+		return NULL;
+
+	high = READ_ONCE(*android_cgroup_perf_hi_slot(cgrp));
+	if (!high)
+		return NULL;
+	smp_rmb();
+	low = READ_ONCE(*android_cgroup_perf_lo_slot(cgrp));
+	value = ((u64)high << 32) | low;
+
+	return (struct perf_cgroup *)(unsigned long)value;
+}
+
+int android_cgroup_perf_kmi_set(struct cgroup *cgrp,
+				struct perf_cgroup *perf)
+{
+	u64 value = (unsigned long)perf;
+
+	if (!cgrp || !perf)
+		return -ENODEV;
+	if (WARN_ON_ONCE(android_cgroup_perf_kmi_get(cgrp)))
+		return -EBUSY;
+
+	/* Pair with the high-word-first load in android_cgroup_perf_kmi_get(). */
+	smp_wmb();
+	WRITE_ONCE(*android_cgroup_perf_lo_slot(cgrp), lower_32_bits(value));
+	smp_wmb();
+	WRITE_ONCE(*android_cgroup_perf_hi_slot(cgrp), upper_32_bits(value));
+	return 0;
+}
+
+struct perf_cgroup *android_cgroup_perf_kmi_take(struct cgroup *cgrp)
+{
+	struct perf_cgroup *perf = android_cgroup_perf_kmi_get(cgrp);
+
+	if (!perf)
+		return NULL;
+
+	/* The final cgroup free path has excluded all sidecar users. */
+	WRITE_ONCE(*android_cgroup_perf_hi_slot(cgrp), 0);
+	smp_wmb();
+	WRITE_ONCE(*android_cgroup_perf_lo_slot(cgrp), 0);
+	return perf;
+}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+static struct android_cgroup_pids_state *
+android_cgroup_pids_state(struct cgroup *cgrp)
+{
+	struct android_cgroup_kmi_ext *ext;
+
+	if (!cgrp || !cgroup_parent(cgrp) || !cgrp->kmi_ext_info)
+		return NULL;
+
+	ext = container_of(cgrp->kmi_ext_info, struct android_cgroup_kmi_ext,
+				   info);
+	return &ext->pids;
+}
+
+static void android_cgroup_pids_update_peak(struct android_cgroup_pids_state *pids,
+					    s64 value)
+{
+	s64 peak = atomic64_read(&pids->peak);
+
+	while (value > peak) {
+		if (atomic64_cmpxchg(&pids->peak, peak, value) == peak)
+			break;
+		peak = atomic64_read(&pids->peak);
+	}
+}
+
+static void android_cgroup_pids_charge(struct cgroup *cgrp, int nr)
+{
+	for (; cgroup_parent(cgrp); cgrp = cgroup_parent(cgrp)) {
+		struct android_cgroup_pids_state *pids =
+			android_cgroup_pids_state(cgrp);
+		s64 value;
+
+		if (!pids)
+			continue;
+		value = atomic64_add_return(nr, &pids->count);
+		android_cgroup_pids_update_peak(pids, value);
+	}
+}
+
+static void android_cgroup_pids_uncharge(struct cgroup *cgrp, int nr)
+{
+	for (; cgroup_parent(cgrp); cgrp = cgroup_parent(cgrp)) {
+		struct android_cgroup_pids_state *pids =
+			android_cgroup_pids_state(cgrp);
+
+		if (pids)
+			WARN_ON_ONCE(atomic64_add_negative(-nr, &pids->count));
+	}
+}
+
+static int android_cgroup_pids_try_charge(struct cgroup *cgrp, int nr)
+{
+	struct cgroup *start = cgrp;
+	struct cgroup *failed = NULL;
+
+	for (; cgroup_parent(cgrp); cgrp = cgroup_parent(cgrp)) {
+		struct android_cgroup_pids_state *pids =
+			android_cgroup_pids_state(cgrp);
+		s64 value;
+
+		if (!pids)
+			continue;
+		value = atomic64_add_return(nr, &pids->count);
+		if (value > atomic64_read(&pids->limit)) {
+			failed = cgrp;
+			break;
+		}
+		android_cgroup_pids_update_peak(pids, value);
+	}
+
+	if (!failed)
+		return 0;
+
+	for (cgrp = start; ; cgrp = cgroup_parent(cgrp)) {
+		struct android_cgroup_pids_state *pids =
+			android_cgroup_pids_state(cgrp);
+
+		if (pids)
+			WARN_ON_ONCE(atomic64_add_negative(-nr, &pids->count));
+		if (cgrp == failed)
+			break;
+	}
+
+	return -EAGAIN;
+}
+
+static void android_cgroup_pids_notify_events(struct cgroup *cgrp)
+{
+	struct kernfs_node *kn;
+
+	kn = kernfs_find_and_get(cgrp->kn, "pids.events");
+	if (!kn)
+		return;
+
+	kernfs_notify(kn);
+	kernfs_put(kn);
+}
+#endif
 
 /*
  * To avoid confusing the compiler (and generating warnings) with code
@@ -152,6 +504,119 @@ EXPORT_SYMBOL_GPL(cgroup_threadgroup_rwsem);
 static struct workqueue_struct *cgroup_offline_wq;
 static struct workqueue_struct *cgroup_release_wq;
 static struct workqueue_struct *cgroup_free_wq;
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+static struct android_cgroup_kmi_ext *
+android_hugetlb_cgroup_ext(struct cgroup *cgrp)
+{
+	struct cgroup_kmi_ext_info *info;
+
+	if (!cgrp || !cgroup_on_dfl(cgrp))
+		return NULL;
+
+	info = READ_ONCE(cgrp->kmi_ext_info);
+	return info ? container_of(info, struct android_cgroup_kmi_ext, info) :
+		NULL;
+}
+
+static void android_hugetlb_cgroup_offline_workfn(struct work_struct *work)
+{
+	struct android_cgroup_kmi_ext *ext =
+		container_of(work, struct android_cgroup_kmi_ext,
+			     hugetlb_offline_work);
+	struct hugetlb_cgroup *h_cg = READ_ONCE(ext->hugetlb);
+	struct cgroup *cgrp;
+
+	if (!h_cg)
+		return;
+
+	cgrp = ext->hugetlb_cgrp;
+	cgroup_lock();
+	/*
+	 * A virtual controller has no native css online-count to serialize
+	 * parent and child offlining.  Keep the parent online until every
+	 * dying direct child has moved its pages to this sidecar.
+	 */
+	if (ext->hugetlb_offline_children) {
+		cgroup_unlock();
+		return;
+	}
+	android_hugetlb_cgroup_offline(h_cg);
+	ext->hugetlb_offline_done = true;
+	WRITE_ONCE(ext->hugetlb_offline_pending, false);
+
+	if (ext->hugetlb_offline_parent_waiting) {
+		struct cgroup *parent = cgroup_parent(cgrp);
+		struct android_cgroup_kmi_ext *parent_ext;
+
+		ext->hugetlb_offline_parent_waiting = false;
+		parent_ext = android_hugetlb_cgroup_ext(parent);
+		if (WARN_ON_ONCE(!parent_ext ||
+				 !parent_ext->hugetlb_offline_children)) {
+			/* The parent sidecar is pinned by the child cgroup. */
+		} else if (--parent_ext->hugetlb_offline_children == 0 &&
+			   smp_load_acquire(&parent_ext->hugetlb_offline_pending)) {
+			queue_work(cgroup_offline_wq,
+				   &parent_ext->hugetlb_offline_work);
+		}
+	}
+	cgroup_unlock();
+
+	/* The kill-confirm callback pins self until page charges are moved. */
+	css_put(&cgrp->self);
+}
+
+static void android_hugetlb_cgroup_killed_ref_fn(struct percpu_ref *ref)
+{
+	struct cgroup_subsys_state *css =
+		container_of(ref, struct cgroup_subsys_state, refcnt);
+	struct cgroup *cgrp = css->cgroup;
+	struct cgroup_kmi_ext_info *info;
+	struct android_cgroup_kmi_ext *ext;
+
+	if (!cgroup_on_dfl(cgrp))
+		return;
+
+	info = READ_ONCE(cgrp->kmi_ext_info);
+	if (!info)
+		return;
+
+	ext = container_of(info, struct android_cgroup_kmi_ext, info);
+	if (!READ_ONCE(ext->hugetlb))
+		return;
+
+	/* The percpu-ref confirmation callback owns a temporary self ref. */
+	css_get(css);
+	/* A child completion may now safely wake this pinned work item. */
+	smp_store_release(&ext->hugetlb_offline_pending, true);
+	queue_work(cgroup_offline_wq, &ext->hugetlb_offline_work);
+}
+
+static void android_hugetlb_cgroup_track_dying_children(struct cgroup *cgrp)
+{
+	struct android_cgroup_kmi_ext *ext;
+	struct cgroup_subsys_state *child_css;
+
+	ext = android_hugetlb_cgroup_ext(cgrp);
+	if (!ext || !ext->hugetlb)
+		return;
+
+	css_for_each_child(child_css, &cgrp->self) {
+		struct android_cgroup_kmi_ext *child_ext;
+
+		if (child_css->flags & CSS_ONLINE)
+			continue;
+		child_ext = android_hugetlb_cgroup_ext(child_css->cgroup);
+		if (!child_ext || !child_ext->hugetlb ||
+		    child_ext->hugetlb_offline_done ||
+		    child_ext->hugetlb_offline_parent_waiting)
+			continue;
+
+		child_ext->hugetlb_offline_parent_waiting = true;
+		ext->hugetlb_offline_children++;
+	}
+}
+#endif
 
 /* generate an array of cgroup subsystem pointers */
 #define SUBSYS(_x) [_x ## _cgrp_id] = &_x ## _cgrp_subsys,
@@ -318,9 +783,26 @@ static u16 cgrp_dfl_implicit_ss_mask;
 /* some controllers can be threaded on the default hierarchy */
 static u16 cgrp_dfl_threaded_ss_mask;
 
+static u16 cgroup_threaded_ss_mask(void)
+{
+	u16 mask = cgrp_dfl_threaded_ss_mask;
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	mask |= ANDROID_CGROUP_PIDS_BIT;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+#endif
+	return mask;
+}
+
 /* The list of hierarchy roots */
 LIST_HEAD(cgroup_roots);
 static int cgroup_root_count;
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+/* A virtual net_cls controller may be bound to one v1 hierarchy. */
+static struct cgroup_root __rcu *android_cgroup_net_cls_v1_root;
+#endif
 
 /* hierarchy ID allocation and mapping, protected by cgroup_mutex */
 static DEFINE_IDR(cgroup_hierarchy_idr);
@@ -355,6 +837,13 @@ struct cgroup_namespace init_cgroup_ns = {
 static struct file_system_type cgroup2_fs_type;
 static struct cftype cgroup_base_files[];
 static struct cftype cgroup_psi_files[];
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+static struct cftype android_cgroup_pids_files[];
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+static struct cftype android_cgroup_net_cls_files[];
+static struct cftype android_cgroup_net_cls_noprefix_files[];
+#endif
 
 /* cgroup optional features */
 enum cgroup_opt_features {
@@ -384,6 +873,14 @@ static void kill_css(struct cgroup_subsys_state *css);
 static int cgroup_addrm_files(struct cgroup_subsys_state *css,
 			      struct cgroup *cgrp, struct cftype cfts[],
 			      bool is_add);
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+static int android_cgroup_pids_sync_files(struct cgroup *cgrp);
+static void android_cgroup_pids_remove_files(struct cgroup *cgrp);
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+static int android_cgroup_net_cls_sync_files(struct cgroup *cgrp);
+static void android_cgroup_net_cls_remove_files(struct cgroup *cgrp);
+#endif
 
 #ifdef CONFIG_DEBUG_CGROUP_REF
 #define CGROUP_REF_FN_ATTRS	noinline
@@ -523,7 +1020,7 @@ static bool cgroup_can_be_thread_root(struct cgroup *cgrp)
 		return false;
 
 	/* and no domain controllers can be enabled */
-	if (cgrp->subtree_control & ~cgrp_dfl_threaded_ss_mask)
+	if (cgrp->subtree_control & ~cgroup_threaded_ss_mask())
 		return false;
 
 	return true;
@@ -545,7 +1042,7 @@ static bool cgroup_is_thread_root(struct cgroup *cgrp)
 	 * enabled is a thread root.
 	 */
 	if (cgroup_has_tasks(cgrp) &&
-	    (cgrp->subtree_control & cgrp_dfl_threaded_ss_mask))
+	    (cgrp->subtree_control & cgroup_threaded_ss_mask()))
 		return true;
 
 	return false;
@@ -580,13 +1077,26 @@ static u16 cgroup_control(struct cgroup *cgrp)
 
 		/* threaded cgroups can only have threaded controllers */
 		if (cgroup_is_threaded(cgrp))
-			ss_mask &= cgrp_dfl_threaded_ss_mask;
+			ss_mask &= cgroup_threaded_ss_mask();
 		return ss_mask;
 	}
 
 	if (cgroup_on_dfl(cgrp))
 		root_ss_mask &= ~(cgrp_dfl_inhibit_ss_mask |
 				  cgrp_dfl_implicit_ss_mask);
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	if (cgroup_on_dfl(cgrp))
+		root_ss_mask |= ANDROID_CGROUP_PIDS_BIT;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (cgroup_on_dfl(cgrp) &&
+	    !READ_ONCE(android_cgroup_net_cls_v1_root))
+		root_ss_mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	if (cgroup_on_dfl(cgrp))
+		root_ss_mask |= ANDROID_CGROUP_HUGETLB_BIT;
+#endif
 	return root_ss_mask;
 }
 
@@ -600,12 +1110,76 @@ static u16 cgroup_ss_mask(struct cgroup *cgrp)
 
 		/* threaded cgroups can only have threaded controllers */
 		if (cgroup_is_threaded(cgrp))
-			ss_mask &= cgrp_dfl_threaded_ss_mask;
+			ss_mask &= cgroup_threaded_ss_mask();
 		return ss_mask;
 	}
 
-	return cgrp->root->subsys_mask;
+	{
+		u16 root_ss_mask = cgrp->root->subsys_mask;
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+		if (cgroup_on_dfl(cgrp))
+			root_ss_mask |= ANDROID_CGROUP_PIDS_BIT;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (cgroup_on_dfl(cgrp) &&
+		    !READ_ONCE(android_cgroup_net_cls_v1_root))
+			root_ss_mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+		if (cgroup_on_dfl(cgrp))
+			root_ss_mask |= ANDROID_CGROUP_HUGETLB_BIT;
+#endif
+		return root_ss_mask;
+	}
 }
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+static bool android_cgroup_pids_enabled(struct cgroup *cgrp)
+{
+	return cgroup_on_dfl(cgrp) &&
+		(cgroup_control(cgrp) & ANDROID_CGROUP_PIDS_BIT);
+}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+static bool android_cgroup_net_cls_enabled(struct cgroup *cgrp)
+{
+	struct cgroup_root *v1_root =
+		READ_ONCE(android_cgroup_net_cls_v1_root);
+
+	if (cgroup_on_dfl(cgrp))
+		return !v1_root &&
+			(cgroup_control(cgrp) & ANDROID_CGROUP_NET_CLASSID_BIT);
+
+	return cgrp->root == v1_root &&
+		(cgrp->root->subsys_mask & ANDROID_CGROUP_NET_CLASSID_BIT);
+}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+struct hugetlb_cgroup *android_cgroup_hugetlb_get(struct cgroup *cgrp)
+{
+	struct cgroup_kmi_ext_info *info;
+	struct android_cgroup_kmi_ext *ext;
+
+	if (!cgrp || !cgroup_on_dfl(cgrp))
+		return NULL;
+
+	info = READ_ONCE(cgrp->kmi_ext_info);
+	if (!info)
+		return NULL;
+
+	ext = container_of(info, struct android_cgroup_kmi_ext, info);
+	return READ_ONCE(ext->hugetlb);
+}
+
+bool android_cgroup_hugetlb_enabled(struct cgroup *cgrp)
+{
+	return cgroup_on_dfl(cgrp) &&
+		(cgroup_control(cgrp) & ANDROID_CGROUP_HUGETLB_BIT);
+}
+#endif
 
 /**
  * cgroup_css - obtain a cgroup's css for the specified subsystem
@@ -1474,6 +2048,11 @@ static void cgroup_destroy_root(struct cgroup_root *root)
 	BUG_ON(atomic_read(&root->nr_cgrps));
 	BUG_ON(!list_empty(&cgrp->self.children));
 
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (root->subsys_mask & ANDROID_CGROUP_NET_CLASSID_BIT)
+		android_cgroup_net_cls_teardown_root(root);
+#endif
+
 	/* Rebind all subsystems back to the default hierarchy */
 	WARN_ON(rebind_subsystems(&cgrp_dfl_root, root->subsys_mask));
 
@@ -1619,6 +2198,31 @@ struct cgroup *task_cgroup_from_root(struct task_struct *task,
 	 */
 	return cset_cgroup_from_root(task_css_set(task), root);
 }
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+u32 android_cgroup_net_cls_task_classid(struct task_struct *task)
+{
+	struct cgroup_root *root;
+	struct cgroup *cgrp;
+	unsigned long flags;
+	u32 classid = 0;
+
+	rcu_read_lock();
+	root = rcu_dereference(android_cgroup_net_cls_v1_root);
+
+	spin_lock_irqsave(&css_set_lock, flags);
+	if (root)
+		cgrp = task_cgroup_from_root(task, root);
+	else
+		cgrp = task_css_set(task)->dfl_cgrp;
+	if (cgrp)
+		classid = android_cgroup_net_cls_get_classid(cgrp);
+	spin_unlock_irqrestore(&css_set_lock, flags);
+
+	rcu_read_unlock();
+	return classid;
+}
+#endif
 
 /*
  * A task must hold cgroup_mutex to modify cgroups.
@@ -1821,6 +2425,13 @@ static void cgroup_rm_file(struct cgroup *cgrp, const struct cftype *cft)
 		spin_unlock_irq(&cgroup_file_kn_lock);
 
 		del_timer_sync(&cfile->notify_timer);
+	}
+
+	if (cft->ss && (cgrp->root->flags & CGRP_ROOT_NOPREFIX) &&
+	    !(cft->flags & CFTYPE_NO_PREFIX)) {
+		snprintf(name, CGROUP_FILE_NAME_MAX, "%s.%s", cft->ss->name,
+			 cft->name);
+		kernfs_remove_by_name(cgrp->kn, name);
 	}
 
 	kernfs_remove_by_name(cgrp->kn, cgroup_file_name(cgrp, cft, name));
@@ -2239,9 +2850,25 @@ int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask)
 	if (ret)
 		goto destroy_root;
 
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (ss_mask & ANDROID_CGROUP_NET_CLASSID_BIT) {
+		root->subsys_mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+		ret = android_cgroup_net_cls_setup_root(root);
+		if (ret) {
+			root->subsys_mask &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+			goto exit_stats;
+		}
+	}
+#endif
+
 	ret = rebind_subsystems(root, ss_mask);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (ss_mask & ANDROID_CGROUP_NET_CLASSID_BIT)
+			android_cgroup_net_cls_teardown_root(root);
+#endif
 		goto exit_stats;
+	}
 
 	if (root == &cgrp_dfl_root) {
 		ret = cgroup_bpf_inherit(root_cgrp);
@@ -2727,6 +3354,12 @@ static int cgroup_migrate_execute(struct cgroup_mgctx *mgctx)
 			struct css_set *from_cset = task_css_set(task);
 			struct css_set *to_cset = cset->mg_dst_cset;
 
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+			if (from_cset->dfl_cgrp != to_cset->dfl_cgrp) {
+				android_cgroup_pids_charge(to_cset->dfl_cgrp, 1);
+				android_cgroup_pids_uncharge(from_cset->dfl_cgrp, 1);
+			}
+#endif
 			get_css_set(to_cset);
 			to_cset->nr_tasks++;
 			css_set_move_task(task, from_cset, to_cset, true);
@@ -2759,6 +3392,28 @@ static int cgroup_migrate_execute(struct cgroup_mgctx *mgctx)
 			}
 		} while_each_subsys_mask();
 	}
+
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+	if (tset->nr_tasks) {
+		struct cgroup_subsys_state *css;
+
+		/* The pseudo controller has no subsystem ID or css array slot. */
+		tset->ssid = 0;
+		cgroup_taskset_for_each(task, css, tset)
+			android_perf_cgroup_migrate_task(task);
+	}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (tset->nr_tasks) {
+		struct cgroup_subsys_state *css;
+
+		/* The virtual controller has no cgroup subsystem slot. */
+		tset->ssid = 0;
+		cgroup_taskset_for_each(task, css, tset)
+			android_cgroup_net_cls_update_task(task);
+	}
+#endif
 
 	ret = 0;
 	goto out_release_tset;
@@ -3132,7 +3787,7 @@ void cgroup_procs_write_finish(struct task_struct *task, bool threadgroup_locked
 			ss->post_attach();
 }
 
-static void cgroup_print_ss_mask(struct seq_file *seq, u16 ss_mask)
+static bool cgroup_print_ss_mask(struct seq_file *seq, u16 ss_mask)
 {
 	struct cgroup_subsys *ss;
 	bool printed = false;
@@ -3144,6 +3799,38 @@ static void cgroup_print_ss_mask(struct seq_file *seq, u16 ss_mask)
 		seq_puts(seq, ss->name);
 		printed = true;
 	} while_each_subsys_mask();
+
+	return printed;
+}
+
+static void cgroup_print_controller_mask(struct seq_file *seq, u16 ss_mask)
+{
+	bool printed = cgroup_print_ss_mask(seq, ss_mask);
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	if (ss_mask & ANDROID_CGROUP_PIDS_BIT) {
+		if (printed)
+			seq_putc(seq, ' ');
+		seq_puts(seq, "pids");
+		printed = true;
+	}
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	if (ss_mask & ANDROID_CGROUP_HUGETLB_BIT) {
+		if (printed)
+			seq_putc(seq, ' ');
+		seq_puts(seq, "hugetlb");
+		printed = true;
+	}
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (ss_mask & ANDROID_CGROUP_NET_CLASSID_BIT) {
+		if (printed)
+			seq_putc(seq, ' ');
+		seq_puts(seq, "net_cls");
+		printed = true;
+	}
+#endif
 	if (printed)
 		seq_putc(seq, '\n');
 }
@@ -3153,7 +3840,7 @@ static int cgroup_controllers_show(struct seq_file *seq, void *v)
 {
 	struct cgroup *cgrp = seq_css(seq)->cgroup;
 
-	cgroup_print_ss_mask(seq, cgroup_control(cgrp));
+	cgroup_print_controller_mask(seq, cgroup_control(cgrp));
 	return 0;
 }
 
@@ -3162,7 +3849,7 @@ static int cgroup_subtree_control_show(struct seq_file *seq, void *v)
 {
 	struct cgroup *cgrp = seq_css(seq)->cgroup;
 
-	cgroup_print_ss_mask(seq, cgrp->subtree_control);
+	cgroup_print_controller_mask(seq, cgrp->subtree_control);
 	return 0;
 }
 
@@ -3392,6 +4079,21 @@ static int cgroup_apply_control_enable(struct cgroup *cgrp)
 					return ret;
 			}
 		}
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+		ret = android_cgroup_pids_sync_files(dsct);
+		if (ret)
+			return ret;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+		ret = android_hugetlb_cgroup_sync_files(dsct);
+		if (ret)
+			return ret;
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		ret = android_cgroup_net_cls_sync_files(dsct);
+		if (ret)
+			return ret;
+#endif
 	}
 
 	return 0;
@@ -3435,6 +4137,18 @@ static void cgroup_apply_control_disable(struct cgroup *cgrp)
 					ss->css_reset(css);
 			}
 		}
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+		if (!android_cgroup_pids_enabled(dsct))
+			android_cgroup_pids_remove_files(dsct);
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+		if (!android_cgroup_hugetlb_enabled(dsct))
+			android_hugetlb_cgroup_remove_files(dsct);
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (!android_cgroup_net_cls_enabled(dsct))
+			android_cgroup_net_cls_remove_files(dsct);
+#endif
 	}
 }
 
@@ -3492,7 +4206,7 @@ static void cgroup_finalize_control(struct cgroup *cgrp, int ret)
 
 static int cgroup_vet_subtree_control_enable(struct cgroup *cgrp, u16 enable)
 {
-	u16 domain_enable = enable & ~cgrp_dfl_threaded_ss_mask;
+	u16 domain_enable = enable & ~cgroup_threaded_ss_mask();
 
 	/* if nothing is getting enabled, nothing to worry about */
 	if (!enable)
@@ -3549,6 +4263,48 @@ static ssize_t cgroup_subtree_control_write(struct kernfs_open_file *of,
 	while ((tok = strsep(&buf, " "))) {
 		if (tok[0] == '\0')
 			continue;
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+		if (!strcmp(tok + 1, "pids")) {
+			if (*tok == '+') {
+				enable |= ANDROID_CGROUP_PIDS_BIT;
+				disable &= ~ANDROID_CGROUP_PIDS_BIT;
+			} else if (*tok == '-') {
+				disable |= ANDROID_CGROUP_PIDS_BIT;
+				enable &= ~ANDROID_CGROUP_PIDS_BIT;
+			} else {
+				return -EINVAL;
+			}
+			continue;
+		}
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+		if (!strcmp(tok + 1, "hugetlb")) {
+			if (*tok == '+') {
+				enable |= ANDROID_CGROUP_HUGETLB_BIT;
+				disable &= ~ANDROID_CGROUP_HUGETLB_BIT;
+			} else if (*tok == '-') {
+				disable |= ANDROID_CGROUP_HUGETLB_BIT;
+				enable &= ~ANDROID_CGROUP_HUGETLB_BIT;
+			} else {
+				return -EINVAL;
+			}
+			continue;
+		}
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (!strcmp(tok + 1, "net_cls")) {
+			if (*tok == '+') {
+				enable |= ANDROID_CGROUP_NET_CLASSID_BIT;
+				disable &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+			} else if (*tok == '-') {
+				disable |= ANDROID_CGROUP_NET_CLASSID_BIT;
+				enable &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+			} else {
+				return -EINVAL;
+			}
+			continue;
+		}
+#endif
 		do_each_subsys_mask(ss, ssid, ~cgrp_dfl_inhibit_ss_mask) {
 			if (!cgroup_ssid_enabled(ssid) ||
 			    strcmp(tok + 1, ss->name))
@@ -3599,6 +4355,75 @@ static ssize_t cgroup_subtree_control_write(struct kernfs_open_file *of,
 			}
 		}
 	}
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	if (enable & ANDROID_CGROUP_PIDS_BIT) {
+		if (cgrp->subtree_control & ANDROID_CGROUP_PIDS_BIT) {
+			enable &= ~ANDROID_CGROUP_PIDS_BIT;
+		} else if (!(cgroup_control(cgrp) & ANDROID_CGROUP_PIDS_BIT)) {
+			ret = -ENOENT;
+			goto out_unlock;
+		}
+	} else if (disable & ANDROID_CGROUP_PIDS_BIT) {
+		if (!(cgrp->subtree_control & ANDROID_CGROUP_PIDS_BIT)) {
+			disable &= ~ANDROID_CGROUP_PIDS_BIT;
+		} else {
+			cgroup_for_each_live_child(child, cgrp) {
+				if (child->subtree_control & ANDROID_CGROUP_PIDS_BIT) {
+					ret = -EBUSY;
+					goto out_unlock;
+				}
+			}
+		}
+	}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	if (enable & ANDROID_CGROUP_HUGETLB_BIT) {
+		if (cgrp->subtree_control & ANDROID_CGROUP_HUGETLB_BIT) {
+			enable &= ~ANDROID_CGROUP_HUGETLB_BIT;
+		} else if (!(cgroup_control(cgrp) & ANDROID_CGROUP_HUGETLB_BIT)) {
+			ret = -ENOENT;
+			goto out_unlock;
+		}
+	} else if (disable & ANDROID_CGROUP_HUGETLB_BIT) {
+		if (!(cgrp->subtree_control & ANDROID_CGROUP_HUGETLB_BIT)) {
+			disable &= ~ANDROID_CGROUP_HUGETLB_BIT;
+		} else {
+			cgroup_for_each_live_child(child, cgrp) {
+				if (child->subtree_control &
+				    ANDROID_CGROUP_HUGETLB_BIT) {
+					ret = -EBUSY;
+					goto out_unlock;
+				}
+			}
+		}
+	}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (enable & ANDROID_CGROUP_NET_CLASSID_BIT) {
+		if (cgrp->subtree_control & ANDROID_CGROUP_NET_CLASSID_BIT) {
+			enable &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+		} else if (!(cgroup_control(cgrp) &
+			     ANDROID_CGROUP_NET_CLASSID_BIT)) {
+			ret = -ENOENT;
+			goto out_unlock;
+		}
+	} else if (disable & ANDROID_CGROUP_NET_CLASSID_BIT) {
+		if (!(cgrp->subtree_control & ANDROID_CGROUP_NET_CLASSID_BIT)) {
+			disable &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+		} else {
+			cgroup_for_each_live_child(child, cgrp) {
+				if (child->subtree_control &
+				    ANDROID_CGROUP_NET_CLASSID_BIT) {
+					ret = -EBUSY;
+					goto out_unlock;
+				}
+			}
+		}
+	}
+#endif
 
 	if (!enable && !disable) {
 		ret = 0;
@@ -3656,7 +4481,7 @@ static int cgroup_enable_threaded(struct cgroup *cgrp)
 	 * not mixable, so let's check it explicitly.
 	 */
 	if (cgroup_is_populated(cgrp) ||
-	    cgrp->subtree_control & ~cgrp_dfl_threaded_ss_mask)
+	    cgrp->subtree_control & ~cgroup_threaded_ss_mask())
 		return -EOPNOTSUPP;
 
 	/* we're joining the parent's domain, ensure its validity */
@@ -4435,6 +5260,13 @@ static int cgroup_add_file(struct cgroup_subsys_state *css, struct cgroup *cgrp,
 				kernfs_create_link(cgrp->kn, name, kn);
 	}
 
+	if (cft->ss && (cgrp->root->flags & CGRP_ROOT_NOPREFIX) &&
+	    !(cft->flags & CFTYPE_NO_PREFIX)) {
+		snprintf(name, CGROUP_FILE_NAME_MAX, "%s.%s", cft->ss->name,
+			 cft->name);
+		kernfs_create_link(cgrp->kn, name, kn);
+	}
+
 	return 0;
 }
 
@@ -4571,6 +5403,45 @@ static int cgroup_init_cftypes(struct cgroup_subsys *ss, struct cftype *cfts)
 		cgroup_exit_cftypes(cfts);
 	return ret;
 }
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+int android_cgroup_hugetlb_register_cftypes(struct cftype *cfts)
+{
+	return cgroup_init_cftypes(NULL, cfts);
+}
+
+int android_cgroup_hugetlb_addrm_files(struct cgroup *cgrp,
+				       struct cftype *cfts, bool is_add)
+{
+	struct cftype *cft;
+	int ret;
+
+	lockdep_assert_held(&cgroup_mutex);
+
+	if (!is_add)
+		return cgroup_addrm_files(&cgrp->self, cgrp, cfts, false);
+
+	/* Control updates can revisit an already-visible cgroup. */
+	for (cft = cfts; cft->name[0] != '\0'; cft++) {
+		struct kernfs_node *kn;
+
+		if ((cft->flags & CFTYPE_NOT_ON_ROOT) && !cgroup_parent(cgrp))
+			continue;
+
+		kn = kernfs_find_and_get(cgrp->kn, cft->name);
+		if (kn) {
+			kernfs_put(kn);
+			continue;
+		}
+
+		ret = cgroup_add_file(&cgrp->self, cgrp, cft);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+#endif
 
 static void cgroup_rm_cftypes_locked(struct cftype *cfts)
 {
@@ -5419,6 +6290,304 @@ static ssize_t cgroup_threads_write(struct kernfs_open_file *of,
 	return __cgroup_procs_write(of, buf, false) ?: nbytes;
 }
 
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+static ssize_t android_cgroup_pids_max_write(struct kernfs_open_file *of,
+					      char *buf, size_t nbytes,
+					      loff_t off)
+{
+	struct cgroup *cgrp = of_css(of)->cgroup;
+	struct android_cgroup_pids_state *pids =
+		android_cgroup_pids_state(cgrp);
+	s64 limit;
+	int ret;
+
+	if (!android_cgroup_pids_enabled(cgrp) || !pids)
+		return -ENOENT;
+
+	buf = strstrip(buf);
+	if (!strcmp(buf, "max")) {
+		limit = ANDROID_CGROUP_PIDS_MAX;
+	} else {
+		ret = kstrtos64(buf, 0, &limit);
+		if (ret)
+			return ret;
+		if (limit < 0 || limit >= ANDROID_CGROUP_PIDS_MAX)
+			return -EINVAL;
+	}
+
+	atomic64_set(&pids->limit, limit);
+	return nbytes;
+}
+
+static int android_cgroup_pids_max_show(struct seq_file *seq, void *v)
+{
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct android_cgroup_pids_state *pids =
+		android_cgroup_pids_state(cgrp);
+	s64 limit;
+
+	if (!android_cgroup_pids_enabled(cgrp) || !pids)
+		return -ENOENT;
+
+	limit = atomic64_read(&pids->limit);
+	if (limit >= ANDROID_CGROUP_PIDS_MAX)
+		seq_puts(seq, "max\n");
+	else
+		seq_printf(seq, "%lld\n", (long long)limit);
+	return 0;
+}
+
+static int android_cgroup_pids_current_show(struct seq_file *seq, void *v)
+{
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct android_cgroup_pids_state *pids =
+		android_cgroup_pids_state(cgrp);
+
+	if (!android_cgroup_pids_enabled(cgrp) || !pids)
+		return -ENOENT;
+
+	seq_printf(seq, "%lld\n", (long long)atomic64_read(&pids->count));
+	return 0;
+}
+
+static int android_cgroup_pids_peak_show(struct seq_file *seq, void *v)
+{
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct android_cgroup_pids_state *pids =
+		android_cgroup_pids_state(cgrp);
+
+	if (!android_cgroup_pids_enabled(cgrp) || !pids)
+		return -ENOENT;
+
+	seq_printf(seq, "%lld\n", (long long)atomic64_read(&pids->peak));
+	return 0;
+}
+
+static int android_cgroup_pids_events_show(struct seq_file *seq, void *v)
+{
+	struct cgroup *cgrp = seq_css(seq)->cgroup;
+	struct android_cgroup_pids_state *pids =
+		android_cgroup_pids_state(cgrp);
+
+	if (!android_cgroup_pids_enabled(cgrp) || !pids)
+		return -ENOENT;
+
+	seq_printf(seq, "max %lld\n",
+		   (long long)atomic64_read(&pids->events_limit));
+	return 0;
+}
+
+static struct cftype android_cgroup_pids_files[] = {
+	{
+		.name = "pids.max",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = android_cgroup_pids_max_show,
+		.write = android_cgroup_pids_max_write,
+	},
+	{
+		.name = "pids.current",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = android_cgroup_pids_current_show,
+	},
+	{
+		.name = "pids.peak",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = android_cgroup_pids_peak_show,
+	},
+	{
+		.name = "pids.events",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = android_cgroup_pids_events_show,
+	},
+	{ }
+};
+
+static void android_cgroup_pids_remove_files(struct cgroup *cgrp)
+{
+	struct cftype *cft;
+
+	for (cft = android_cgroup_pids_files; cft->name[0] != '\0'; cft++)
+		cgroup_rm_file(cgrp, cft);
+}
+
+static int android_cgroup_pids_sync_files(struct cgroup *cgrp)
+{
+	struct cftype *cft;
+	int ret;
+
+	if (!cgroup_parent(cgrp) || !android_cgroup_pids_enabled(cgrp))
+		return 0;
+
+	for (cft = android_cgroup_pids_files; cft->name[0] != '\0'; cft++) {
+		struct kernfs_node *kn;
+
+		kn = kernfs_find_and_get(cgrp->kn, cft->name);
+		if (kn) {
+			kernfs_put(kn);
+			continue;
+		}
+
+		ret = cgroup_add_file(&cgrp->self, cgrp, cft);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+static u64 android_cgroup_net_cls_read_classid(struct cgroup_subsys_state *css,
+						       struct cftype *cft)
+{
+	struct cgroup *cgrp = css->cgroup;
+
+	if (!android_cgroup_net_cls_enabled(cgrp))
+		return 0;
+
+	return android_cgroup_net_cls_get_classid(cgrp);
+}
+
+static int android_cgroup_net_cls_write_classid(struct cgroup_subsys_state *css,
+						 struct cftype *cft, u64 value)
+{
+	struct cgroup *cgrp = css->cgroup;
+	struct css_task_iter it;
+	struct task_struct *task;
+	int ret;
+
+	if (!android_cgroup_net_cls_enabled(cgrp))
+		return -ENOENT;
+
+	ret = android_cgroup_net_cls_set_classid(cgrp, (u32)value);
+	if (ret)
+		return ret;
+
+	css_task_iter_start(css, 0, &it);
+	while ((task = css_task_iter_next(&it)))
+		android_cgroup_net_cls_update_task(task);
+	css_task_iter_end(&it);
+
+	return 0;
+}
+
+static struct cftype android_cgroup_net_cls_files[] = {
+	{
+		.name		= "net_cls.classid",
+		.read_u64	= android_cgroup_net_cls_read_classid,
+		.write_u64	= android_cgroup_net_cls_write_classid,
+	},
+	{ }
+};
+
+static struct cftype android_cgroup_net_cls_noprefix_files[] = {
+	{
+		.name		= "classid",
+		.read_u64	= android_cgroup_net_cls_read_classid,
+		.write_u64	= android_cgroup_net_cls_write_classid,
+	},
+	{ }
+};
+
+static void android_cgroup_net_cls_remove_files(struct cgroup *cgrp)
+{
+	struct cftype *cft;
+
+	for (cft = android_cgroup_net_cls_files; cft->name[0] != '\0'; cft++)
+		cgroup_rm_file(cgrp, cft);
+	for (cft = android_cgroup_net_cls_noprefix_files;
+	     cft->name[0] != '\0'; cft++)
+		cgroup_rm_file(cgrp, cft);
+}
+
+static int android_cgroup_net_cls_sync_files(struct cgroup *cgrp)
+{
+	struct cftype *cft;
+	int ret;
+
+	if (!android_cgroup_net_cls_enabled(cgrp) ||
+	    (cgroup_on_dfl(cgrp) && !cgroup_parent(cgrp)))
+		return 0;
+
+	if (cgrp->root->flags & CGRP_ROOT_NOPREFIX)
+		cft = android_cgroup_net_cls_noprefix_files;
+	else
+		cft = android_cgroup_net_cls_files;
+
+	for (; cft->name[0] != '\0'; cft++) {
+		struct kernfs_node *kn;
+
+		kn = kernfs_find_and_get(cgrp->kn, cft->name);
+		if (kn) {
+			kernfs_put(kn);
+			continue;
+		}
+
+		ret = cgroup_add_file(&cgrp->self, cgrp, cft);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static bool android_cgroup_net_cls_dfl_busy(void)
+{
+	struct cgroup_subsys_state *css;
+	struct cgroup *cgrp;
+
+	cgroup_for_each_live_descendant_pre(cgrp, css, &cgrp_dfl_root.cgrp)
+		if (cgrp->subtree_control & ANDROID_CGROUP_NET_CLASSID_BIT)
+			return true;
+
+	return false;
+}
+
+int android_cgroup_net_cls_setup_root(struct cgroup_root *root)
+{
+	struct cgroup *cgrp = &root->cgrp;
+	int ret;
+
+	if (root == &cgrp_dfl_root)
+		return 0;
+	if (READ_ONCE(android_cgroup_net_cls_v1_root) ||
+	    android_cgroup_net_cls_dfl_busy())
+		return -EBUSY;
+
+	if (!cgrp->kmi_ext_info) {
+		cgrp->kmi_ext_info = kzalloc(sizeof(*cgrp->kmi_ext_info), GFP_KERNEL);
+		if (!cgrp->kmi_ext_info)
+			return -ENOMEM;
+	}
+
+	rcu_assign_pointer(android_cgroup_net_cls_v1_root, root);
+	ret = android_cgroup_net_cls_sync_files(cgrp);
+	if (!ret)
+		return 0;
+
+	RCU_INIT_POINTER(android_cgroup_net_cls_v1_root, NULL);
+	synchronize_rcu();
+	kfree(cgrp->kmi_ext_info);
+	cgrp->kmi_ext_info = NULL;
+	return ret;
+}
+
+void android_cgroup_net_cls_teardown_root(struct cgroup_root *root)
+{
+	struct cgroup *cgrp = &root->cgrp;
+
+	if (rcu_access_pointer(android_cgroup_net_cls_v1_root) != root)
+		return;
+
+	android_cgroup_net_cls_remove_files(cgrp);
+	RCU_INIT_POINTER(android_cgroup_net_cls_v1_root, NULL);
+	synchronize_rcu();
+	kfree(cgrp->kmi_ext_info);
+	cgrp->kmi_ext_info = NULL;
+	root->subsys_mask &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+}
+#endif
+
 /* cgroup core interface files for the default hierarchy */
 static struct cftype cgroup_base_files[] = {
 	{
@@ -5608,6 +6777,14 @@ static void css_free_rwork_fn(struct work_struct *work)
 			kernfs_put(cgrp->kn);
 			psi_cgroup_free(cgrp);
 			cgroup_rstat_exit(cgrp);
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+			android_perf_cgroup_free(cgrp);
+#endif
+	#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT) || \
+		IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+			/* Sidecars may be pinned by a dying task or reservation. */
+			android_cgroup_kmi_ext_free(cgrp);
+	#endif
 			kfree(cgrp);
 		} else {
 			/*
@@ -5856,9 +7033,30 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 			goto out_psi_free;
 	}
 
+	#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT) || \
+		IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	ret = android_cgroup_kmi_ext_alloc(cgrp);
+	if (ret)
+		goto out_psi_free;
+#else
 	cgrp->kmi_ext_info = kzalloc(sizeof(*cgrp->kmi_ext_info), GFP_KERNEL);
 	if (!cgrp->kmi_ext_info)
 		goto out_psi_free;
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+	if (cgroup_on_dfl(cgrp)) {
+		ret = android_perf_cgroup_alloc(cgrp);
+		if (ret) {
+			android_perf_cgroup_free(cgrp);
+			goto out_psi_free;
+		}
+	}
+#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	android_cgroup_net_cls_inherit(cgrp, parent);
+#endif
 
 	/*
 	 * New cgroup inherits effective freeze counter, and
@@ -5918,9 +7116,21 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 
 	cgroup_propagate_control(cgrp);
 
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+	if (cgroup_on_dfl(cgrp))
+		android_perf_cgroup_online(cgrp);
+#endif
+
 	return cgrp;
 
 out_psi_free:
+	#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT) || \
+		IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	android_cgroup_kmi_ext_free(cgrp);
+	#else
+	kfree(cgrp->kmi_ext_info);
+	cgrp->kmi_ext_info = NULL;
+	#endif
 	psi_cgroup_free(cgrp);
 out_kernfs_remove:
 	kernfs_remove(cgrp->kn);
@@ -6147,10 +7357,22 @@ static int cgroup_destroy_locked(struct cgroup *cgrp)
 	 */
 	cgrp->self.flags &= ~CSS_ONLINE;
 
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	/*
+	 * Dead children stay linked until their css release.  Record the ones
+	 * whose virtual HugeTLB offlining still has to hand pages to @cgrp.
+	 */
+	if (cgroup_on_dfl(cgrp))
+		android_hugetlb_cgroup_track_dying_children(cgrp);
+#endif
+
 	spin_lock_irq(&css_set_lock);
 	list_for_each_entry(link, &cgrp->cset_links, cset_link)
 		link->cset->dead = true;
+	#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT) && \
+		!IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	kfree(cgrp->kmi_ext_info);
+	#endif
 	spin_unlock_irq(&css_set_lock);
 
 	/* initiate massacre of all css's */
@@ -6182,8 +7404,17 @@ static int cgroup_destroy_locked(struct cgroup *cgrp)
 	if (cgrp->root == &cgrp_dfl_root)
 		cgroup_bpf_offline(cgrp);
 
-	/* put the base reference */
-	percpu_ref_kill(&cgrp->self.refcnt);
+	/*
+	 * The virtual HugeTLB controller shares self's lifetime.  Wait until
+	 * css_tryget_online() is globally closed before moving its page charges.
+	 */
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	if (cgroup_on_dfl(cgrp))
+		percpu_ref_kill_and_confirm(&cgrp->self.refcnt,
+					    android_hugetlb_cgroup_killed_ref_fn);
+	else
+#endif
+		percpu_ref_kill(&cgrp->self.refcnt);
 
 	return 0;
 };
@@ -6314,6 +7545,18 @@ int __init cgroup_init(void)
 	int ssid;
 
 	BUILD_BUG_ON(CGROUP_SUBSYS_COUNT_ACTIVE > 16);
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	BUILD_BUG_ON(CGROUP_SUBSYS_COUNT >= 14);
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	BUILD_BUG_ON(CGROUP_SUBSYS_COUNT >= 16);
+	BUG_ON(cgroup_init_cftypes(NULL, android_cgroup_pids_files));
+#endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	BUILD_BUG_ON(CGROUP_SUBSYS_COUNT >= 15);
+	BUG_ON(cgroup_init_cftypes(NULL, android_cgroup_net_cls_files));
+	BUG_ON(cgroup_init_cftypes(NULL, android_cgroup_net_cls_noprefix_files));
+#endif
 	BUG_ON(cgroup_init_cftypes(NULL, cgroup_base_files));
 	BUG_ON(cgroup_init_cftypes(NULL, cgroup_psi_files));
 	BUG_ON(cgroup_init_cftypes(NULL, cgroup1_base_files));
@@ -6332,6 +7575,16 @@ int __init cgroup_init(void)
 		 css_set_hash(&init_css_set, NULL));
 
 	BUG_ON(cgroup_setup_root(&cgrp_dfl_root, 0));
+
+	#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT) || \
+		IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	BUG_ON(android_cgroup_kmi_ext_alloc(&cgrp_dfl_root.cgrp));
+	#endif
+
+#ifdef CONFIG_ANDROID_CGROUP_PERF_KMI_EXT
+	BUG_ON(android_perf_cgroup_alloc(&cgrp_dfl_root.cgrp));
+	android_perf_cgroup_online(&cgrp_dfl_root.cgrp);
+#endif
 
 	cgroup_unlock();
 
@@ -6530,7 +7783,12 @@ int proc_cgroup_show(struct seq_file *m, struct pid_namespace *ns,
 			for_each_subsys(ss, ssid)
 				if (root->subsys_mask & (1 << ssid))
 					seq_printf(m, "%s%s", count++ ? "," : "",
-						   ss->legacy_name);
+							   ss->legacy_name);
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (root != &cgrp_dfl_root &&
+		    (root->subsys_mask & ANDROID_CGROUP_NET_CLASSID_BIT))
+			seq_printf(m, "%snet_cls", count++ ? "," : "");
+#endif
 		if (strlen(root->name))
 			seq_printf(m, "%sname=%s", count ? "," : "",
 				   root->name);
@@ -6794,6 +8052,28 @@ int cgroup_can_fork(struct task_struct *child, struct kernel_clone_args *kargs)
 			goto out_revert;
 	} while_each_subsys_mask();
 
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	if (kargs->cset) {
+		struct cgroup *cgrp = kargs->cset->dfl_cgrp;
+		struct android_cgroup_pids_state *pids;
+
+		if (android_cgroup_pids_enabled(cgrp)) {
+			ret = android_cgroup_pids_try_charge(cgrp, 1);
+			if (ret) {
+				pids = android_cgroup_pids_state(cgrp);
+				if (pids) {
+					atomic64_inc(&pids->events_limit);
+					android_cgroup_pids_notify_events(cgrp);
+				}
+				goto out_revert;
+			}
+		} else {
+			/* Keep counts ready for a later +pids operation. */
+			android_cgroup_pids_charge(cgrp, 1);
+		}
+	}
+#endif
+
 	return 0;
 
 out_revert:
@@ -6827,6 +8107,11 @@ void cgroup_cancel_fork(struct task_struct *child,
 	for_each_subsys(ss, i)
 		if (ss->cancel_fork)
 			ss->cancel_fork(child, kargs->cset);
+
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	if (kargs->cset)
+		android_cgroup_pids_uncharge(kargs->cset->dfl_cgrp, 1);
+#endif
 
 	cgroup_css_set_put_fork(kargs);
 }
@@ -6966,6 +8251,9 @@ void cgroup_release(struct task_struct *task)
 	struct cgroup_subsys *ss;
 	int ssid;
 
+#ifdef CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT
+	android_cgroup_pids_uncharge(task_css_set(task)->dfl_cgrp, 1);
+#endif
 	do_each_subsys_mask(ss, ssid, have_release_callback) {
 		ss->release(task);
 	} while_each_subsys_mask();

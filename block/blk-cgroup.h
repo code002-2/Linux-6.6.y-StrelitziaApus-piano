@@ -19,6 +19,7 @@
 #include <linux/kthread.h>
 #include <linux/blk-mq.h>
 #include <linux/llist.h>
+#include <linux/build_bug.h>
 #include <linux/android_vendor.h>
 
 struct blkcg_gq;
@@ -73,7 +74,8 @@ struct blkcg_gq {
 	struct blkg_iostat_set		iostat;
 
 	struct blkg_policy_data		*pd[BLKCG_MAX_POLS];
-#ifdef CONFIG_BLK_CGROUP_PUNT_BIO
+#if IS_ENABLED(CONFIG_BLK_CGROUP_PUNT_BIO) && \
+	!IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
 	spinlock_t			async_bio_lock;
 	struct bio_list			async_bios;
 #endif
@@ -92,6 +94,37 @@ struct blkcg_gq {
 
 	ANDROID_OEM_DATA(1);
 };
+
+#if IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT)
+#define ANDROID_BLKCG_PUNT_BIO_EXT_LO_OFFSET	308
+#define ANDROID_BLKCG_PUNT_BIO_EXT_HI_OFFSET	340
+
+/*
+ * Keep these checks next to the raw sidecar slots.  The slots deliberately
+ * remain unnamed padding: naming them would alter the BTF/KMI type even when
+ * the physical layout did not change.  If an unrelated Kconfig change
+ * consumes either hole, do not silently build a kernel with a different GKI
+ * blkcg_gq layout.
+ */
+static_assert(sizeof(void *) == sizeof(u64),
+	      "Android blkcg punt-bio sidecar requires 64-bit pointers");
+static_assert(offsetof(struct blkcg_gq, use_delay) +
+	      sizeof(((struct blkcg_gq *)0)->use_delay) ==
+	      ANDROID_BLKCG_PUNT_BIO_EXT_LO_OFFSET,
+	      "Android blkcg punt-bio low pointer slot moved");
+static_assert(offsetof(struct blkcg_gq, delay_nsec) ==
+	      ANDROID_BLKCG_PUNT_BIO_EXT_LO_OFFSET + sizeof(u32),
+	      "Android blkcg punt-bio delay_nsec offset changed");
+static_assert(offsetof(struct blkcg_gq, last_use) +
+	      sizeof(((struct blkcg_gq *)0)->last_use) ==
+	      ANDROID_BLKCG_PUNT_BIO_EXT_HI_OFFSET,
+	      "Android blkcg punt-bio high pointer slot moved");
+static_assert(offsetof(struct blkcg_gq, rcu_head) ==
+	      ANDROID_BLKCG_PUNT_BIO_EXT_HI_OFFSET + sizeof(u32),
+	      "Android blkcg punt-bio rcu_head offset changed");
+static_assert(sizeof(struct blkcg_gq) == 368,
+	      "Android blkcg punt-bio sidecar changed blkcg_gq size");
+#endif
 
 struct blkcg {
 	struct cgroup_subsys_state	css;

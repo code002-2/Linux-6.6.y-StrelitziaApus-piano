@@ -893,7 +893,7 @@ after_nat:
 	/* do the statistics and put it back */
 	ip_vs_out_stats(cp, skb);
 
-	skb->ipvs_property = 1;
+	skb_set_ipvs_property(skb);
 	if (!(cp->flags & IP_VS_CONN_F_NFCT))
 		ip_vs_notrack(skb);
 	else
@@ -1310,7 +1310,7 @@ handle_response(int af, struct sk_buff *skb, struct ip_vs_proto_data *pd,
 after_nat:
 	ip_vs_out_stats(cp, skb);
 	ip_vs_set_state(cp, IP_VS_DIR_OUTPUT, skb, pd, iph->len);
-	skb->ipvs_property = 1;
+	skb_set_ipvs_property(skb);
 	if (!(cp->flags & IP_VS_CONN_F_NFCT))
 		ip_vs_notrack(skb);
 	else
@@ -1341,7 +1341,7 @@ ip_vs_out_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *stat
 	struct sock *sk;
 
 	/* Already marked as IPVS request or reply? */
-	if (skb->ipvs_property)
+	if (skb_ipvs_property(skb))
 		return NF_ACCEPT;
 
 	sk = skb_to_full_sk(skb);
@@ -1931,7 +1931,7 @@ ip_vs_in_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state
 	int af = state->pf;
 
 	/* Already marked as IPVS request or reply? */
-	if (skb->ipvs_property)
+	if (skb_ipvs_property(skb))
 		return NF_ACCEPT;
 
 	/*
@@ -1993,7 +1993,7 @@ ip_vs_in_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state
 		 * skip it if we're ignoring tunneled packets
 		 */
 		if (sysctl_ignore_tunneled(ipvs))
-			skb->ipvs_property = 1;
+			skb_set_ipvs_property(skb);
 
 		return NF_ACCEPT;
 	}

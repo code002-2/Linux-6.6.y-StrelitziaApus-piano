@@ -61,7 +61,8 @@ struct resv_map {
 	struct list_head region_cache;
 	long region_cache_count;
 	struct rw_semaphore rw_sema;
-#ifdef CONFIG_CGROUP_HUGETLB
+#if defined(CONFIG_CGROUP_HUGETLB) && \
+	!defined(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	/*
 	 * On private mappings, the counter to uncharge reservations is stored
 	 * here. If these fields are 0, then either the mapping is shared, or
@@ -96,7 +97,8 @@ struct file_region {
 	struct list_head link;
 	long from;
 	long to;
-#ifdef CONFIG_CGROUP_HUGETLB
+#if defined(CONFIG_CGROUP_HUGETLB) && \
+	!defined(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	/*
 	 * On shared mappings, each reserved region appears as a struct
 	 * file_region in resv_map. These fields hold the info needed to
@@ -106,6 +108,149 @@ struct file_region {
 	struct cgroup_subsys_state *css;
 #endif
 };
+
+#ifdef CONFIG_CGROUP_HUGETLB
+/*
+ * Android GKI keeps resv_map and file_region at their HUGETLB-only ABI
+ * layouts.  The virtual controller allocates these wrappers and exposes the
+ * embedded upstream object to all existing users.  This keeps reservation
+ * accounting state private without consuming fields or padding in either
+ * published type.
+ */
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+struct android_hugetlb_resv_map_ext {
+	struct resv_map resv_map;
+	struct page_counter *reservation_counter;
+	unsigned long pages_per_hpage;
+	struct cgroup_subsys_state *css;
+};
+
+struct android_hugetlb_file_region_ext {
+	struct file_region file_region;
+	struct page_counter *reservation_counter;
+	struct cgroup_subsys_state *css;
+};
+
+static_assert(offsetof(struct android_hugetlb_resv_map_ext, resv_map) == 0,
+		      "hugetlb resv_map extension must start with resv_map");
+static_assert(offsetof(struct android_hugetlb_file_region_ext, file_region) == 0,
+		      "hugetlb file_region extension must start with file_region");
+static_assert(sizeof(struct resv_map) == 120,
+		      "Android HugeTLB extension must preserve resv_map");
+static_assert(sizeof(struct file_region) == 32,
+		      "Android HugeTLB extension must preserve file_region");
+#endif
+
+static inline struct page_counter *
+hugetlb_resv_map_reservation_counter(struct resv_map *resv_map)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	return container_of(resv_map, struct android_hugetlb_resv_map_ext,
+			    resv_map)->reservation_counter;
+#else
+	return resv_map->reservation_counter;
+#endif
+}
+
+static inline void hugetlb_resv_map_set_reservation_counter(
+		struct resv_map *resv_map, struct page_counter *counter)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	container_of(resv_map, struct android_hugetlb_resv_map_ext,
+		     resv_map)->reservation_counter = counter;
+#else
+	resv_map->reservation_counter = counter;
+#endif
+}
+
+static inline unsigned long
+hugetlb_resv_map_pages_per_hpage(struct resv_map *resv_map)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	return container_of(resv_map, struct android_hugetlb_resv_map_ext,
+			    resv_map)->pages_per_hpage;
+#else
+	return resv_map->pages_per_hpage;
+#endif
+}
+
+static inline void hugetlb_resv_map_set_pages_per_hpage(
+		struct resv_map *resv_map, unsigned long pages_per_hpage)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	container_of(resv_map, struct android_hugetlb_resv_map_ext,
+		     resv_map)->pages_per_hpage = pages_per_hpage;
+#else
+	resv_map->pages_per_hpage = pages_per_hpage;
+#endif
+}
+
+static inline struct cgroup_subsys_state *
+hugetlb_resv_map_css(struct resv_map *resv_map)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	return container_of(resv_map, struct android_hugetlb_resv_map_ext,
+			    resv_map)->css;
+#else
+	return resv_map->css;
+#endif
+}
+
+static inline void hugetlb_resv_map_set_css(
+		struct resv_map *resv_map, struct cgroup_subsys_state *css)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	container_of(resv_map, struct android_hugetlb_resv_map_ext,
+		     resv_map)->css = css;
+#else
+	resv_map->css = css;
+#endif
+}
+
+static inline struct page_counter *
+hugetlb_file_region_reservation_counter(struct file_region *region)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	return container_of(region, struct android_hugetlb_file_region_ext,
+			    file_region)->reservation_counter;
+#else
+	return region->reservation_counter;
+#endif
+}
+
+static inline void hugetlb_file_region_set_reservation_counter(
+		struct file_region *region, struct page_counter *counter)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	container_of(region, struct android_hugetlb_file_region_ext,
+		     file_region)->reservation_counter = counter;
+#else
+	region->reservation_counter = counter;
+#endif
+}
+
+static inline struct cgroup_subsys_state *
+hugetlb_file_region_css(struct file_region *region)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	return container_of(region, struct android_hugetlb_file_region_ext,
+			    file_region)->css;
+#else
+	return region->css;
+#endif
+}
+
+static inline void hugetlb_file_region_set_css(
+		struct file_region *region, struct cgroup_subsys_state *css)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	container_of(region, struct android_hugetlb_file_region_ext,
+		     file_region)->css = css;
+#else
+	region->css = css;
+#endif
+}
+#endif /* CONFIG_CGROUP_HUGETLB */
 
 struct hugetlb_vma_lock {
 	struct kref refs;
@@ -731,13 +876,19 @@ struct hstate {
 	unsigned int nr_huge_pages_node[MAX_NUMNODES];
 	unsigned int free_huge_pages_node[MAX_NUMNODES];
 	unsigned int surplus_huge_pages_node[MAX_NUMNODES];
-#ifdef CONFIG_CGROUP_HUGETLB
+#if defined(CONFIG_CGROUP_HUGETLB) && \
+	!defined(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	/* cgroup control files */
 	struct cftype cgroup_files_dfl[8];
 	struct cftype cgroup_files_legacy[10];
 #endif
 	char name[HSTATE_NAME_LEN];
 };
+
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+static_assert(sizeof(struct hstate) == 200,
+		      "Android HugeTLB extension must preserve hstate");
+#endif
 
 struct huge_bootmem_page {
 	struct list_head list;
@@ -987,6 +1138,138 @@ static inline spinlock_t *huge_pte_lockptr(struct hstate *h,
 
 void hugetlb_report_usage(struct seq_file *m, struct mm_struct *mm);
 
+#ifdef CONFIG_ANDROID_HUGETLB_KMI_EXT
+/*
+ * The frozen arm64 GKI mm_struct has two 4-byte natural alignment holes,
+ * but no spare contiguous pointer-sized member.  Keep the HugeTLB counter
+ * out of line and use only those unnamed holes for its address.
+ */
+struct android_hugetlb_mm_ext {
+	atomic_long_t usage;
+};
+
+#define ANDROID_HUGETLB_MM_EXT_LO_OFFSET	228
+#define ANDROID_HUGETLB_MM_EXT_HI_OFFSET	1020
+
+/* Fail closed if an unrelated configuration consumes either reviewed hole. */
+static_assert(sizeof(void *) == sizeof(u64),
+	      "Android HugeTLB sidecar requires 64-bit pointers");
+static_assert(offsetof(struct mm_struct, mm_lock_seq) +
+	      sizeof(((struct mm_struct *)0)->mm_lock_seq) ==
+	      ANDROID_HUGETLB_MM_EXT_LO_OFFSET,
+	      "Android HugeTLB low pointer slot moved");
+static_assert(offsetof(struct mm_struct, hiwater_rss) ==
+	      ANDROID_HUGETLB_MM_EXT_LO_OFFSET + sizeof(u32),
+	      "Android HugeTLB hiwater_rss offset changed");
+static_assert(offsetof(struct mm_struct, ioctx_lock) +
+	      sizeof(((struct mm_struct *)0)->ioctx_lock) ==
+	      ANDROID_HUGETLB_MM_EXT_HI_OFFSET,
+	      "Android HugeTLB high pointer slot moved");
+static_assert(offsetof(struct mm_struct, ioctx_table) ==
+	      ANDROID_HUGETLB_MM_EXT_HI_OFFSET + sizeof(u32),
+	      "Android HugeTLB ioctx_table offset changed");
+static_assert(sizeof(struct mm_struct) == 1216,
+	      "Android HugeTLB sidecar changed mm_struct size");
+
+static inline u32 hugetlb_mm_ext_slot_read(const struct mm_struct *mm,
+					  unsigned int offset)
+{
+	return READ_ONCE(*(const u32 *)((const char *)mm + offset));
+}
+
+static inline void hugetlb_mm_ext_slot_write(struct mm_struct *mm,
+					     unsigned int offset, u32 value)
+{
+	WRITE_ONCE(*(u32 *)((char *)mm + offset), value);
+}
+
+static inline struct android_hugetlb_mm_ext *
+hugetlb_mm_ext(const struct mm_struct *mm)
+{
+	u32 high;
+	u64 address;
+
+	high = hugetlb_mm_ext_slot_read(mm, ANDROID_HUGETLB_MM_EXT_HI_OFFSET);
+	if (!high)
+		return NULL;
+
+	/* Pair with the release before publishing the high half. */
+	smp_rmb();
+	address = hugetlb_mm_ext_slot_read(mm, ANDROID_HUGETLB_MM_EXT_LO_OFFSET);
+	address |= (u64)high << 32;
+
+	return (struct android_hugetlb_mm_ext *)(unsigned long)address;
+}
+
+static inline void hugetlb_mm_ext_set(struct mm_struct *mm,
+				      struct android_hugetlb_mm_ext *ext)
+{
+	u64 address = (unsigned long)ext;
+
+	hugetlb_mm_ext_slot_write(mm, ANDROID_HUGETLB_MM_EXT_LO_OFFSET,
+				 lower_32_bits(address));
+	/* Publish the low half before readers can observe a nonzero high half. */
+	smp_wmb();
+	hugetlb_mm_ext_slot_write(mm, ANDROID_HUGETLB_MM_EXT_HI_OFFSET,
+				 upper_32_bits(address));
+}
+
+static inline void hugetlb_mm_ext_reset(struct mm_struct *mm)
+{
+	/* This is used before a new mm is published or after its final put. */
+	hugetlb_mm_ext_slot_write(mm, ANDROID_HUGETLB_MM_EXT_LO_OFFSET, 0);
+	/* Keep raw-slot readers from observing the high half before this clear. */
+	smp_wmb();
+	hugetlb_mm_ext_slot_write(mm, ANDROID_HUGETLB_MM_EXT_HI_OFFSET, 0);
+}
+
+static inline struct android_hugetlb_mm_ext *
+hugetlb_mm_ext_take(struct mm_struct *mm)
+{
+	struct android_hugetlb_mm_ext *ext = hugetlb_mm_ext(mm);
+
+	hugetlb_mm_ext_reset(mm);
+	return ext;
+}
+
+static inline atomic_long_t *hugetlb_count_ptr(struct mm_struct *mm)
+{
+	struct android_hugetlb_mm_ext *ext = hugetlb_mm_ext(mm);
+
+	return ext ? &ext->usage : NULL;
+}
+
+static inline void hugetlb_count_init(struct mm_struct *mm)
+{
+	atomic_long_t *usage = hugetlb_count_ptr(mm);
+
+	if (usage)
+		atomic_long_set(usage, 0);
+}
+
+static inline void hugetlb_count_add(long l, struct mm_struct *mm)
+{
+	atomic_long_t *usage = hugetlb_count_ptr(mm);
+
+	if (likely(usage))
+		atomic_long_add(l, usage);
+}
+
+static inline void hugetlb_count_sub(long l, struct mm_struct *mm)
+{
+	atomic_long_t *usage = hugetlb_count_ptr(mm);
+
+	if (likely(usage))
+		atomic_long_sub(l, usage);
+}
+
+static inline long hugetlb_count_read(struct mm_struct *mm)
+{
+	atomic_long_t *usage = hugetlb_count_ptr(mm);
+
+	return usage ? atomic_long_read(usage) : 0;
+}
+#else
 static inline void hugetlb_count_init(struct mm_struct *mm)
 {
 	atomic_long_set(&mm->hugetlb_usage, 0);
@@ -1001,6 +1284,12 @@ static inline void hugetlb_count_sub(long l, struct mm_struct *mm)
 {
 	atomic_long_sub(l, &mm->hugetlb_usage);
 }
+
+static inline long hugetlb_count_read(struct mm_struct *mm)
+{
+	return atomic_long_read(&mm->hugetlb_usage);
+}
+#endif
 
 #ifndef huge_ptep_modify_prot_start
 #define huge_ptep_modify_prot_start huge_ptep_modify_prot_start

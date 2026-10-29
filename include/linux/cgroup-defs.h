@@ -914,7 +914,8 @@ static inline void cgroup_threadgroup_change_end(struct task_struct *tsk) {}
  */
 struct sock_cgroup_data {
 	struct cgroup	*cgroup; /* v2 */
-#ifdef CONFIG_CGROUP_NET_CLASSID
+#if defined(CONFIG_CGROUP_NET_CLASSID) && \
+	!IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
 #ifndef __GENKSYMS__
 	/* code002: classid 与 prioidx 均在 16 字节内重排，sizeof 不变；
 	 * genksyms 侧隐藏 -> CRC 与原厂一致 */
@@ -925,6 +926,10 @@ struct sock_cgroup_data {
 	u16		prioidx; /* v1 */
 #endif
 };
+
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
+#define ANDROID_SOCK_CGROUP_CLASSID_OFFSET	12
+#endif
 
 static inline u16 sock_cgroup_prioidx(const struct sock_cgroup_data *skcd)
 {
@@ -938,7 +943,12 @@ static inline u16 sock_cgroup_prioidx(const struct sock_cgroup_data *skcd)
 static inline u32 sock_cgroup_classid(const struct sock_cgroup_data *skcd)
 {
 #ifdef CONFIG_CGROUP_NET_CLASSID
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
+	return READ_ONCE(*(const u32 *)((const char *)skcd +
+					 ANDROID_SOCK_CGROUP_CLASSID_OFFSET));
+#else
 	return READ_ONCE(skcd->classid);
+#endif
 #else
 	return 0;
 #endif
@@ -956,7 +966,12 @@ static inline void sock_cgroup_set_classid(struct sock_cgroup_data *skcd,
 					   u32 classid)
 {
 #ifdef CONFIG_CGROUP_NET_CLASSID
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
+	WRITE_ONCE(*(u32 *)((char *)skcd + ANDROID_SOCK_CGROUP_CLASSID_OFFSET),
+		   classid);
+#else
 	WRITE_ONCE(skcd->classid, classid);
+#endif
 #endif
 }
 

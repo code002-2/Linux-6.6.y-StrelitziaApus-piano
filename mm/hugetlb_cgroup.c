@@ -23,11 +23,34 @@
 #include <linux/hugetlb.h>
 #include <linux/hugetlb_cgroup.h>
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+struct hugetlb_cgroup *android_cgroup_hugetlb_get(struct cgroup *cgrp);
+bool android_cgroup_hugetlb_enabled(struct cgroup *cgrp);
+int android_cgroup_hugetlb_register_cftypes(struct cftype *cfts);
+int android_cgroup_hugetlb_addrm_files(struct cgroup *cgrp,
+				       struct cftype *cfts, bool is_add);
+#endif
+
 #define MEMFILE_PRIVATE(x, val)	(((x) << 16) | (val))
 #define MEMFILE_IDX(val)	(((val) >> 16) & 0xffff)
 #define MEMFILE_ATTR(val)	((val) & 0xffff)
 
 static struct hugetlb_cgroup *root_h_cgroup __read_mostly;
+
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+/* Keep controller cftypes out of the ABI-visible struct hstate. */
+static struct cftype android_hugetlb_cgroup_dfl_files[HUGE_MAX_HSTATE][8];
+
+static inline struct cftype *hugetlb_cgroup_dfl_files(int idx)
+{
+	return android_hugetlb_cgroup_dfl_files[idx];
+}
+#else
+static inline struct cftype *hugetlb_cgroup_dfl_files(int idx)
+{
+	return hstates[idx].cgroup_files_dfl;
+}
+#endif
 
 static inline struct page_counter *
 __hugetlb_cgroup_counter_from_cgroup(struct hugetlb_cgroup *h_cg, int idx,
@@ -50,16 +73,53 @@ hugetlb_cgroup_counter_from_cgroup_rsvd(struct hugetlb_cgroup *h_cg, int idx)
 	return __hugetlb_cgroup_counter_from_cgroup(h_cg, idx, true);
 }
 
+struct cgroup_subsys_state *
+hugetlb_cgroup_css(struct hugetlb_cgroup *h_cg)
+{
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	return h_cg ? &h_cg->cgroup->self : NULL;
+#else
+	return h_cg ? &h_cg->css : NULL;
+#endif
+}
+
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 static inline
 struct hugetlb_cgroup *hugetlb_cgroup_from_css(struct cgroup_subsys_state *s)
 {
 	return s ? container_of(s, struct hugetlb_cgroup, css) : NULL;
 }
+#endif
 
 static inline
 struct hugetlb_cgroup *hugetlb_cgroup_from_task(struct task_struct *task)
 {
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	struct cgroup *cgrp;
+	struct hugetlb_cgroup *h_cg;
+
+	/* The caller holds RCU while resolving the task's effective controller. */
+	for (cgrp = task_dfl_cgroup(task); cgrp; cgrp = cgroup_parent(cgrp)) {
+		if (!android_cgroup_hugetlb_enabled(cgrp))
+			continue;
+		h_cg = android_cgroup_hugetlb_get(cgrp);
+		if (h_cg && !css_is_dying(hugetlb_cgroup_css(h_cg)))
+			return h_cg;
+	}
+	return root_h_cgroup;
+#else
 	return hugetlb_cgroup_from_css(task_css(task, hugetlb_cgrp_id));
+#endif
+}
+
+static inline struct hugetlb_cgroup *
+hugetlb_cgroup_from_css_state(struct cgroup_subsys_state *css)
+{
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	return css ? android_cgroup_hugetlb_get(css->cgroup) : NULL;
+#else
+	return hugetlb_cgroup_from_css(css);
+#endif
 }
 
 static inline bool hugetlb_cgroup_is_root(struct hugetlb_cgroup *h_cg)
@@ -70,7 +130,12 @@ static inline bool hugetlb_cgroup_is_root(struct hugetlb_cgroup *h_cg)
 static inline struct hugetlb_cgroup *
 parent_hugetlb_cgroup(struct hugetlb_cgroup *h_cg)
 {
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	return h_cg && cgroup_parent(h_cg->cgroup) ?
+		android_cgroup_hugetlb_get(cgroup_parent(h_cg->cgroup)) : NULL;
+#else
 	return hugetlb_cgroup_from_css(h_cg->css.parent);
+#endif
 }
 
 static inline bool hugetlb_cgroup_have_usage(struct hugetlb_cgroup *h_cg)
@@ -123,7 +188,7 @@ static void hugetlb_cgroup_init(struct hugetlb_cgroup *h_cgroup,
 	}
 }
 
-static void hugetlb_cgroup_free(struct hugetlb_cgroup *h_cgroup)
+static void __hugetlb_cgroup_free(struct hugetlb_cgroup *h_cgroup)
 {
 	int node;
 
@@ -132,6 +197,54 @@ static void hugetlb_cgroup_free(struct hugetlb_cgroup *h_cgroup)
 	kfree(h_cgroup);
 }
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+struct hugetlb_cgroup *android_hugetlb_cgroup_alloc(struct cgroup *cgrp)
+{
+	struct hugetlb_cgroup *parent_h_cgroup;
+	struct hugetlb_cgroup *h_cgroup;
+	int node;
+
+	h_cgroup = kzalloc(struct_size(h_cgroup, nodeinfo, nr_node_ids),
+				   GFP_KERNEL);
+	if (!h_cgroup)
+		return ERR_PTR(-ENOMEM);
+
+	h_cgroup->cgroup = cgrp;
+	parent_h_cgroup = cgroup_parent(cgrp) ?
+		android_cgroup_hugetlb_get(cgroup_parent(cgrp)) : NULL;
+	if (cgroup_parent(cgrp) && !parent_h_cgroup) {
+		kfree(h_cgroup);
+		return ERR_PTR(-ENODEV);
+	}
+	if (!cgroup_parent(cgrp))
+		root_h_cgroup = h_cgroup;
+
+	for_each_node(node) {
+		int node_to_alloc =
+			node_state(node, N_NORMAL_MEMORY) ? node : NUMA_NO_NODE;
+
+		h_cgroup->nodeinfo[node] =
+			kzalloc_node(sizeof(struct hugetlb_cgroup_per_node),
+				     GFP_KERNEL, node_to_alloc);
+		if (!h_cgroup->nodeinfo[node])
+			goto fail_alloc_nodeinfo;
+	}
+
+	hugetlb_cgroup_init(h_cgroup, parent_h_cgroup);
+	return h_cgroup;
+
+fail_alloc_nodeinfo:
+	__hugetlb_cgroup_free(h_cgroup);
+	return ERR_PTR(-ENOMEM);
+}
+
+void android_hugetlb_cgroup_free(struct hugetlb_cgroup *h_cgroup)
+{
+	if (!h_cgroup)
+		return;
+	__hugetlb_cgroup_free(h_cgroup);
+}
+#else
 static struct cgroup_subsys_state *
 hugetlb_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 {
@@ -145,7 +258,7 @@ hugetlb_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 	if (!h_cgroup)
 		return ERR_PTR(-ENOMEM);
 
-	if (!parent_h_cgroup)
+	if (!parent_css)
 		root_h_cgroup = h_cgroup;
 
 	/*
@@ -168,14 +281,15 @@ hugetlb_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 	return &h_cgroup->css;
 
 fail_alloc_nodeinfo:
-	hugetlb_cgroup_free(h_cgroup);
+	__hugetlb_cgroup_free(h_cgroup);
 	return ERR_PTR(-ENOMEM);
 }
 
 static void hugetlb_cgroup_css_free(struct cgroup_subsys_state *css)
 {
-	hugetlb_cgroup_free(hugetlb_cgroup_from_css(css));
+	__hugetlb_cgroup_free(hugetlb_cgroup_from_css(css));
 }
+#endif
 
 /*
  * Should be called with hugetlb_lock held.
@@ -212,7 +326,14 @@ static void hugetlb_cgroup_move_parent(int idx, struct hugetlb_cgroup *h_cg,
 	/* Take the pages off the local counter */
 	page_counter_cancel(counter, nr_pages);
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	/* Transfer the page's self-css pin to the parent sidecar. */
+	css_get(hugetlb_cgroup_css(parent));
+#endif
 	set_hugetlb_cgroup(folio, parent);
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	css_put(hugetlb_cgroup_css(h_cg));
+#endif
 out:
 	return;
 }
@@ -221,9 +342,8 @@ out:
  * Force the hugetlb cgroup to empty the hugetlb resources by moving them to
  * the parent cgroup.
  */
-static void hugetlb_cgroup_css_offline(struct cgroup_subsys_state *css)
+static void hugetlb_cgroup_offline(struct hugetlb_cgroup *h_cg)
 {
-	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(css);
 	struct hstate *h;
 	struct page *page;
 
@@ -239,15 +359,52 @@ static void hugetlb_cgroup_css_offline(struct cgroup_subsys_state *css)
 	} while (hugetlb_cgroup_have_usage(h_cg));
 }
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+void android_hugetlb_cgroup_offline(struct hugetlb_cgroup *h_cg)
+{
+	if (h_cg)
+		hugetlb_cgroup_offline(h_cg);
+}
+
+static void hugetlb_cgroup_notify(struct hugetlb_cgroup *h_cg, int idx,
+				  bool local)
+{
+	struct cgroup *cgrp = READ_ONCE(h_cg->cgroup);
+	struct kernfs_node *kn;
+	struct cftype *cft;
+
+	if (!cgrp || !android_cgroup_hugetlb_enabled(cgrp))
+		return;
+
+	cft = &hugetlb_cgroup_dfl_files(idx)[local ? 5 : 4];
+	if (!cft->name[0])
+		return;
+
+	kn = kernfs_find_and_get(cgrp->kn, cft->name);
+	if (!kn)
+		return;
+	kernfs_notify(kn);
+	kernfs_put(kn);
+}
+#endif
+
 static inline void hugetlb_event(struct hugetlb_cgroup *hugetlb, int idx,
 				 enum hugetlb_memory_event event)
 {
 	atomic_long_inc(&hugetlb->events_local[idx][event]);
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	hugetlb_cgroup_notify(hugetlb, idx, true);
+#else
 	cgroup_file_notify(&hugetlb->events_local_file[idx]);
+#endif
 
 	do {
 		atomic_long_inc(&hugetlb->events[idx][event]);
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+		hugetlb_cgroup_notify(hugetlb, idx, false);
+#else
 		cgroup_file_notify(&hugetlb->events_file[idx]);
+#endif
 	} while ((hugetlb = parent_hugetlb_cgroup(hugetlb)) &&
 		 !hugetlb_cgroup_is_root(hugetlb));
 }
@@ -271,7 +428,34 @@ static int __hugetlb_cgroup_charge_cgroup(int idx, unsigned long nr_pages,
 again:
 	rcu_read_lock();
 	h_cg = hugetlb_cgroup_from_task(current);
-	if (!css_tryget(&h_cg->css)) {
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	if (!h_cg || !css_tryget_online(hugetlb_cgroup_css(h_cg))) {
+		rcu_read_unlock();
+		goto again;
+	}
+
+	/*
+	 * Keep the RCU read side through the counter update.  The self-css
+	 * kill confirmation then sees every admitted charge before offlining.
+	 */
+	if (!page_counter_try_charge(
+		    __hugetlb_cgroup_counter_from_cgroup(h_cg, idx, rsvd),
+		    nr_pages, &counter)) {
+		rcu_read_unlock();
+		ret = -ENOMEM;
+		hugetlb_event(h_cg, idx, HUGETLB_MAX);
+		css_put(hugetlb_cgroup_css(h_cg));
+		goto done;
+	}
+	rcu_read_unlock();
+
+	/*
+	 * A virtual sidecar is freed with self.  Reservations already carry a
+	 * css reference; retain the same reference for a charged folio until it
+	 * is uncharged or reparented during cgroup removal.
+	 */
+#else
+	if (!h_cg || !css_tryget(hugetlb_cgroup_css(h_cg))) {
 		rcu_read_unlock();
 		goto again;
 	}
@@ -282,14 +466,15 @@ again:
 		    nr_pages, &counter)) {
 		ret = -ENOMEM;
 		hugetlb_event(h_cg, idx, HUGETLB_MAX);
-		css_put(&h_cg->css);
+		css_put(hugetlb_cgroup_css(h_cg));
 		goto done;
 	}
 	/* Reservations take a reference to the css because they do not get
 	 * reparented.
 	 */
 	if (!rsvd)
-		css_put(&h_cg->css);
+		css_put(hugetlb_cgroup_css(h_cg));
+#endif
 done:
 	*ptr = h_cg;
 	return ret;
@@ -364,7 +549,7 @@ static void __hugetlb_cgroup_uncharge_folio(int idx, unsigned long nr_pages,
 			      nr_pages);
 
 	if (rsvd)
-		css_put(&h_cg->css);
+		css_put(hugetlb_cgroup_css(h_cg));
 	else {
 		unsigned long usage =
 			h_cg->nodeinfo[folio_nid(folio)]->usage[idx];
@@ -375,6 +560,9 @@ static void __hugetlb_cgroup_uncharge_folio(int idx, unsigned long nr_pages,
 		 */
 		WRITE_ONCE(h_cg->nodeinfo[folio_nid(folio)]->usage[idx],
 			   usage - nr_pages);
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+		css_put(hugetlb_cgroup_css(h_cg));
+#endif
 	}
 }
 
@@ -404,8 +592,8 @@ static void __hugetlb_cgroup_uncharge_cgroup(int idx, unsigned long nr_pages,
 								   rsvd),
 			      nr_pages);
 
-	if (rsvd)
-		css_put(&h_cg->css);
+	if (rsvd || IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT))
+		css_put(hugetlb_cgroup_css(h_cg));
 }
 
 void hugetlb_cgroup_uncharge_cgroup(int idx, unsigned long nr_pages,
@@ -423,13 +611,20 @@ void hugetlb_cgroup_uncharge_cgroup_rsvd(int idx, unsigned long nr_pages,
 void hugetlb_cgroup_uncharge_counter(struct resv_map *resv, unsigned long start,
 				     unsigned long end)
 {
-	if (hugetlb_cgroup_disabled() || !resv || !resv->reservation_counter ||
-	    !resv->css)
+	struct page_counter *counter;
+	struct cgroup_subsys_state *css;
+
+	if (hugetlb_cgroup_disabled() || !resv)
+		return;
+	counter = hugetlb_resv_map_reservation_counter(resv);
+	css = hugetlb_resv_map_css(resv);
+	if (!counter || !css)
 		return;
 
-	page_counter_uncharge(resv->reservation_counter,
-			      (end - start) * resv->pages_per_hpage);
-	css_put(resv->css);
+	page_counter_uncharge(counter,
+				      (end - start) *
+				      hugetlb_resv_map_pages_per_hpage(resv));
+	css_put(css);
 }
 
 void hugetlb_cgroup_uncharge_file_region(struct resv_map *resv,
@@ -437,19 +632,25 @@ void hugetlb_cgroup_uncharge_file_region(struct resv_map *resv,
 					 unsigned long nr_pages,
 					 bool region_del)
 {
+	struct page_counter *counter;
+	struct cgroup_subsys_state *css;
+
 	if (hugetlb_cgroup_disabled() || !resv || !rg || !nr_pages)
 		return;
 
-	if (rg->reservation_counter && resv->pages_per_hpage &&
-	    !resv->reservation_counter) {
-		page_counter_uncharge(rg->reservation_counter,
-				      nr_pages * resv->pages_per_hpage);
+	counter = hugetlb_file_region_reservation_counter(rg);
+	css = hugetlb_file_region_css(rg);
+	if (counter && hugetlb_resv_map_pages_per_hpage(resv) &&
+	    !hugetlb_resv_map_reservation_counter(resv)) {
+		page_counter_uncharge(counter,
+				      nr_pages *
+				      hugetlb_resv_map_pages_per_hpage(resv));
 		/*
 		 * Only do css_put(rg->css) when we delete the entire region
 		 * because one file_region must hold exactly one css reference.
 		 */
-		if (region_del)
-			css_put(rg->css);
+		if (region_del && css)
+			css_put(css);
 	}
 }
 
@@ -470,9 +671,13 @@ static int hugetlb_cgroup_read_numa_stat(struct seq_file *seq, void *dummy)
 	struct cftype *cft = seq_cft(seq);
 	int idx = MEMFILE_IDX(cft->private);
 	bool legacy = MEMFILE_ATTR(cft->private);
-	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(seq_css(seq));
+	struct hugetlb_cgroup *h_cg =
+		hugetlb_cgroup_from_css_state(seq_css(seq));
 	struct cgroup_subsys_state *css;
 	unsigned long usage;
+
+	if (!h_cg)
+		return -ENOENT;
 
 	if (legacy) {
 		/* Add up usage across all nodes for the non-hierarchical total. */
@@ -503,10 +708,12 @@ static int hugetlb_cgroup_read_numa_stat(struct seq_file *seq, void *dummy)
 	for_each_node_state(nid, N_MEMORY) {
 		usage = 0;
 		rcu_read_lock();
-		css_for_each_descendant_pre(css, &h_cg->css) {
-			usage += READ_ONCE(hugetlb_cgroup_from_css(css)
-						   ->nodeinfo[nid]
-						   ->usage[idx]);
+		css_for_each_descendant_pre(css, hugetlb_cgroup_css(h_cg)) {
+			struct hugetlb_cgroup *desc_h_cg =
+				hugetlb_cgroup_from_css_state(css);
+
+			if (desc_h_cg)
+				usage += READ_ONCE(desc_h_cg->nodeinfo[nid]->usage[idx]);
 		}
 		rcu_read_unlock();
 		seq_printf(seq, " N%d=%lu", nid, usage * PAGE_SIZE);
@@ -517,6 +724,7 @@ static int hugetlb_cgroup_read_numa_stat(struct seq_file *seq, void *dummy)
 	return 0;
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 static u64 hugetlb_cgroup_read_u64(struct cgroup_subsys_state *css,
 				   struct cftype *cft)
 {
@@ -548,6 +756,7 @@ static u64 hugetlb_cgroup_read_u64(struct cgroup_subsys_state *css,
 		BUG();
 	}
 }
+#endif
 
 static int hugetlb_cgroup_read_u64_max(struct seq_file *seq, void *v)
 {
@@ -556,7 +765,11 @@ static int hugetlb_cgroup_read_u64_max(struct seq_file *seq, void *v)
 	struct cftype *cft = seq_cft(seq);
 	unsigned long limit;
 	struct page_counter *counter;
-	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(seq_css(seq));
+	struct hugetlb_cgroup *h_cg =
+		hugetlb_cgroup_from_css_state(seq_css(seq));
+
+	if (!h_cg)
+		return -ENOENT;
 
 	idx = MEMFILE_IDX(cft->private);
 	counter = &h_cg->hugepage[idx];
@@ -597,10 +810,11 @@ static ssize_t hugetlb_cgroup_write(struct kernfs_open_file *of,
 {
 	int ret, idx;
 	unsigned long nr_pages;
-	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(of_css(of));
+	struct hugetlb_cgroup *h_cg =
+		hugetlb_cgroup_from_css_state(of_css(of));
 	bool rsvd = false;
 
-	if (hugetlb_cgroup_is_root(h_cg)) /* Can't set limit on root */
+	if (!h_cg || hugetlb_cgroup_is_root(h_cg)) /* Can't set limit on root */
 		return -EINVAL;
 
 	buf = strstrip(buf);
@@ -629,11 +843,13 @@ static ssize_t hugetlb_cgroup_write(struct kernfs_open_file *of,
 	return ret ?: nbytes;
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 static ssize_t hugetlb_cgroup_write_legacy(struct kernfs_open_file *of,
 					   char *buf, size_t nbytes, loff_t off)
 {
 	return hugetlb_cgroup_write(of, buf, nbytes, off, "-1");
 }
+#endif
 
 static ssize_t hugetlb_cgroup_write_dfl(struct kernfs_open_file *of,
 					char *buf, size_t nbytes, loff_t off)
@@ -641,6 +857,7 @@ static ssize_t hugetlb_cgroup_write_dfl(struct kernfs_open_file *of,
 	return hugetlb_cgroup_write(of, buf, nbytes, off, "max");
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 static ssize_t hugetlb_cgroup_reset(struct kernfs_open_file *of,
 				    char *buf, size_t nbytes, loff_t off)
 {
@@ -670,6 +887,7 @@ static ssize_t hugetlb_cgroup_reset(struct kernfs_open_file *of,
 	}
 	return ret ?: nbytes;
 }
+#endif
 
 static char *mem_fmt(char *buf, int size, unsigned long hsize)
 {
@@ -687,7 +905,11 @@ static int __hugetlb_events_show(struct seq_file *seq, bool local)
 	int idx;
 	long max;
 	struct cftype *cft = seq_cft(seq);
-	struct hugetlb_cgroup *h_cg = hugetlb_cgroup_from_css(seq_css(seq));
+	struct hugetlb_cgroup *h_cg =
+		hugetlb_cgroup_from_css_state(seq_css(seq));
+
+	if (!h_cg)
+		return -ENOENT;
 
 	idx = MEMFILE_IDX(cft->private);
 
@@ -711,77 +933,97 @@ static int hugetlb_events_local_show(struct seq_file *seq, void *v)
 	return __hugetlb_events_show(seq, true);
 }
 
+static void hugetlb_cgroup_dfl_file_name(struct cftype *cft,
+					 const char *hsize, const char *suffix)
+{
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	/* Virtual cftypes have no cgroup_subsys to add this prefix for us. */
+	snprintf(cft->name, sizeof(cft->name), "hugetlb.%s.%s", hsize, suffix);
+#else
+	snprintf(cft->name, sizeof(cft->name), "%s.%s", hsize, suffix);
+#endif
+}
+
 static void __init __hugetlb_cgroup_file_dfl_init(int idx)
 {
 	char buf[32];
 	struct cftype *cft;
 	struct hstate *h = &hstates[idx];
+	struct cftype *cfts = hugetlb_cgroup_dfl_files(idx);
 
 	/* format the size */
 	mem_fmt(buf, sizeof(buf), huge_page_size(h));
 
 	/* Add the limit file */
-	cft = &h->cgroup_files_dfl[0];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.max", buf);
+	cft = &cfts[0];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "max");
 	cft->private = MEMFILE_PRIVATE(idx, RES_LIMIT);
 	cft->seq_show = hugetlb_cgroup_read_u64_max;
 	cft->write = hugetlb_cgroup_write_dfl;
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* Add the reservation limit file */
-	cft = &h->cgroup_files_dfl[1];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.rsvd.max", buf);
+	cft = &cfts[1];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "rsvd.max");
 	cft->private = MEMFILE_PRIVATE(idx, RES_RSVD_LIMIT);
 	cft->seq_show = hugetlb_cgroup_read_u64_max;
 	cft->write = hugetlb_cgroup_write_dfl;
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* Add the current usage file */
-	cft = &h->cgroup_files_dfl[2];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.current", buf);
+	cft = &cfts[2];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "current");
 	cft->private = MEMFILE_PRIVATE(idx, RES_USAGE);
 	cft->seq_show = hugetlb_cgroup_read_u64_max;
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* Add the current reservation usage file */
-	cft = &h->cgroup_files_dfl[3];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.rsvd.current", buf);
+	cft = &cfts[3];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "rsvd.current");
 	cft->private = MEMFILE_PRIVATE(idx, RES_RSVD_USAGE);
 	cft->seq_show = hugetlb_cgroup_read_u64_max;
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* Add the events file */
-	cft = &h->cgroup_files_dfl[4];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.events", buf);
+	cft = &cfts[4];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "events");
 	cft->private = MEMFILE_PRIVATE(idx, 0);
 	cft->seq_show = hugetlb_events_show;
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	cft->file_offset = offsetof(struct hugetlb_cgroup, events_file[idx]);
+#endif
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* Add the events.local file */
-	cft = &h->cgroup_files_dfl[5];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.events.local", buf);
+	cft = &cfts[5];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "events.local");
 	cft->private = MEMFILE_PRIVATE(idx, 0);
 	cft->seq_show = hugetlb_events_local_show;
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	cft->file_offset = offsetof(struct hugetlb_cgroup,
 				    events_local_file[idx]);
+#endif
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* Add the numa stat file */
-	cft = &h->cgroup_files_dfl[6];
-	snprintf(cft->name, MAX_CFTYPE_NAME, "%s.numa_stat", buf);
+	cft = &cfts[6];
+	hugetlb_cgroup_dfl_file_name(cft, buf, "numa_stat");
 	cft->private = MEMFILE_PRIVATE(idx, 0);
 	cft->seq_show = hugetlb_cgroup_read_numa_stat;
 	cft->flags = CFTYPE_NOT_ON_ROOT;
 
 	/* NULL terminate the last cft */
-	cft = &h->cgroup_files_dfl[7];
+	cft = &cfts[7];
 	memset(cft, 0, sizeof(*cft));
 
-	WARN_ON(cgroup_add_dfl_cftypes(&hugetlb_cgrp_subsys,
-				       h->cgroup_files_dfl));
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	WARN_ON(android_cgroup_hugetlb_register_cftypes(cfts));
+#else
+	WARN_ON(cgroup_add_dfl_cftypes(&hugetlb_cgrp_subsys, cfts));
+#endif
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 static void __init __hugetlb_cgroup_file_legacy_init(int idx)
 {
 	char buf[32];
@@ -858,11 +1100,14 @@ static void __init __hugetlb_cgroup_file_legacy_init(int idx)
 	WARN_ON(cgroup_add_legacy_cftypes(&hugetlb_cgrp_subsys,
 					  h->cgroup_files_legacy));
 }
+#endif
 
 static void __init __hugetlb_cgroup_file_init(int idx)
 {
 	__hugetlb_cgroup_file_dfl_init(idx);
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	__hugetlb_cgroup_file_legacy_init(idx);
+#endif
 }
 
 void __init hugetlb_cgroup_file_init(void)
@@ -879,6 +1124,40 @@ void __init hugetlb_cgroup_file_init(void)
 			__hugetlb_cgroup_file_init(hstate_index(h));
 	}
 }
+
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+int android_hugetlb_cgroup_sync_files(struct cgroup *cgrp)
+{
+	struct hstate *h;
+	int ret;
+
+	if (!cgroup_parent(cgrp) || !android_cgroup_hugetlb_enabled(cgrp))
+		return 0;
+
+	for_each_hstate(h) {
+		if (huge_page_order(h) < HUGETLB_CGROUP_MIN_ORDER)
+			continue;
+		ret = android_cgroup_hugetlb_addrm_files(
+			cgrp, hugetlb_cgroup_dfl_files(hstate_index(h)), true);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+void android_hugetlb_cgroup_remove_files(struct cgroup *cgrp)
+{
+	struct hstate *h;
+
+	for_each_hstate(h) {
+		if (huge_page_order(h) < HUGETLB_CGROUP_MIN_ORDER)
+			continue;
+		android_cgroup_hugetlb_addrm_files(
+			cgrp, hugetlb_cgroup_dfl_files(hstate_index(h)), false);
+	}
+}
+#endif
 
 /*
  * hugetlb_lock will make sure a parallel cgroup rmdir won't happen
@@ -907,6 +1186,12 @@ void hugetlb_cgroup_migrate(struct folio *old_folio, struct folio *new_folio)
 	return;
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+static void hugetlb_cgroup_css_offline(struct cgroup_subsys_state *css)
+{
+	hugetlb_cgroup_offline(hugetlb_cgroup_from_css(css));
+}
+
 static struct cftype hugetlb_files[] = {
 	{} /* terminate */
 };
@@ -918,3 +1203,4 @@ struct cgroup_subsys hugetlb_cgrp_subsys = {
 	.dfl_cftypes	= hugetlb_files,
 	.legacy_cftypes	= hugetlb_files,
 };
+#endif

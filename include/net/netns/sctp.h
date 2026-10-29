@@ -6,11 +6,16 @@
 #include <net/snmp.h>
 
 struct sock;
+struct net;
 struct proc_dir_entry;
 struct sctp_mib;
 struct ctl_table_header;
 
 struct netns_sctp {
+	/* The sidecar needs its namespace for per-net sysctl handlers. */
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	struct net *net;
+#endif
 	DEFINE_SNMP_STAT(struct sctp_mib, sctp_statistics);
 
 #ifdef CONFIG_PROC_FS

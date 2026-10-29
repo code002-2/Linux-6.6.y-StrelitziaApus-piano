@@ -466,10 +466,22 @@ static void btrfs_submit_dev_bio(struct btrfs_device *dev, struct bio *bio)
 
 	btrfsic_check_bio(bio);
 
-	if (bio->bi_opf & REQ_BTRFS_CGROUP_PUNT)
-		blkcg_punt_bio_submit(bio);
-	else
+	if (bio->bi_opf & REQ_BTRFS_CGROUP_PUNT) {
+#if IS_ENABLED(CONFIG_ANDROID_BLKCG_PUNT_BIO_KMI_EXT) && \
+	IS_MODULE(CONFIG_BTRFS_FS)
+		/*
+		 * The GKI profile keeps blkcg_punt_bio_submit private so this
+		 * loadable filesystem cannot introduce a new KMI export.  Direct
+		 * submission preserves I/O correctness; only the optional punt
+		 * optimization is omitted for the module form.
+		 */
 		submit_bio(bio);
+#else
+		blkcg_punt_bio_submit(bio);
+#endif
+	} else {
+		submit_bio(bio);
+	}
 }
 
 static void btrfs_submit_mirrored_bio(struct btrfs_io_context *bioc, int dev_nr)

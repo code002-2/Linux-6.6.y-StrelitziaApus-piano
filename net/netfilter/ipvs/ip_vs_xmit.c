@@ -632,7 +632,7 @@ static inline int ip_vs_tunnel_xmit_prepare(struct sk_buff *skb,
 {
 	int ret = NF_ACCEPT;
 
-	skb->ipvs_property = 1;
+	skb_set_ipvs_property(skb);
 	if (unlikely(cp->flags & IP_VS_CONN_F_NFCT))
 		ret = ip_vs_confirm_conntrack(skb);
 	if (ret == NF_ACCEPT) {
@@ -665,7 +665,7 @@ static inline int ip_vs_nat_send_or_cont(int pf, struct sk_buff *skb,
 {
 	int ret = NF_STOLEN;
 
-	skb->ipvs_property = 1;
+	skb_set_ipvs_property(skb);
 	if (likely(!(cp->flags & IP_VS_CONN_F_NFCT)))
 		ip_vs_notrack(skb);
 	else
@@ -696,7 +696,7 @@ static inline int ip_vs_send_or_cont(int pf, struct sk_buff *skb,
 {
 	int ret = NF_STOLEN;
 
-	skb->ipvs_property = 1;
+	skb_set_ipvs_property(skb);
 	if (likely(!(cp->flags & IP_VS_CONN_F_NFCT)))
 		ip_vs_notrack(skb);
 	if (!local) {

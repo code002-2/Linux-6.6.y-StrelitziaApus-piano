@@ -436,6 +436,54 @@ static void hugetlb_vma_lock_alloc(struct vm_area_struct *vma)
 /* Helper that removes a struct file_region from the resv_map cache and returns
  * it for use.
  */
+static struct file_region *hugetlb_file_region_alloc(gfp_t gfp_mask)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	struct android_hugetlb_file_region_ext *ext;
+
+	ext = kmalloc(sizeof(*ext), gfp_mask);
+	return ext ? &ext->file_region : NULL;
+#else
+	return kmalloc(sizeof(struct file_region), gfp_mask);
+#endif
+}
+
+static void hugetlb_file_region_free(struct file_region *region)
+{
+	if (!region)
+		return;
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	kfree(container_of(region, struct android_hugetlb_file_region_ext,
+			   file_region));
+#else
+	kfree(region);
+#endif
+}
+
+static struct resv_map *hugetlb_resv_map_alloc(void)
+{
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	struct android_hugetlb_resv_map_ext *ext;
+
+	ext = kmalloc(sizeof(*ext), GFP_KERNEL);
+	return ext ? &ext->resv_map : NULL;
+#else
+	return kmalloc(sizeof(struct resv_map), GFP_KERNEL);
+#endif
+}
+
+static void hugetlb_resv_map_free(struct resv_map *resv_map)
+{
+	if (!resv_map)
+		return;
+#ifdef CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT
+	kfree(container_of(resv_map, struct android_hugetlb_resv_map_ext,
+			   resv_map));
+#else
+	kfree(resv_map);
+#endif
+}
+
 static struct file_region *
 get_file_region_entry_from_cache(struct resv_map *resv, long from, long to)
 {
@@ -457,10 +505,11 @@ static void copy_hugetlb_cgroup_uncharge_info(struct file_region *nrg,
 					      struct file_region *rg)
 {
 #ifdef CONFIG_CGROUP_HUGETLB
-	nrg->reservation_counter = rg->reservation_counter;
-	nrg->css = rg->css;
-	if (rg->css)
-		css_get(rg->css);
+	hugetlb_file_region_set_reservation_counter(
+		nrg, hugetlb_file_region_reservation_counter(rg));
+	hugetlb_file_region_set_css(nrg, hugetlb_file_region_css(rg));
+	if (hugetlb_file_region_css(rg))
+		css_get(hugetlb_file_region_css(rg));
 #endif
 }
 
@@ -472,29 +521,31 @@ static void record_hugetlb_cgroup_uncharge_info(struct hugetlb_cgroup *h_cg,
 {
 #ifdef CONFIG_CGROUP_HUGETLB
 	if (h_cg) {
-		nrg->reservation_counter =
-			&h_cg->rsvd_hugepage[hstate_index(h)];
-		nrg->css = &h_cg->css;
+		hugetlb_file_region_set_reservation_counter(
+			nrg, &h_cg->rsvd_hugepage[hstate_index(h)]);
+		hugetlb_file_region_set_css(nrg, hugetlb_cgroup_css(h_cg));
 		/*
-		 * The caller will hold exactly one h_cg->css reference for the
+		 * The caller will hold exactly one h_cg css reference for the
 		 * whole contiguous reservation region. But this area might be
 		 * scattered when there are already some file_regions reside in
 		 * it. As a result, many file_regions may share only one css
-		 * reference. In order to ensure that one file_region must hold
-		 * exactly one h_cg->css reference, we should do css_get for
+		 * reference. In order to ensure that one file_region holds
+		 * exactly one css reference, we should do css_get for
 		 * each file_region and leave the reference held by caller
 		 * untouched.
 		 */
-		css_get(&h_cg->css);
-		if (!resv->pages_per_hpage)
-			resv->pages_per_hpage = pages_per_huge_page(h);
+		css_get(hugetlb_cgroup_css(h_cg));
+		if (!hugetlb_resv_map_pages_per_hpage(resv))
+			hugetlb_resv_map_set_pages_per_hpage(
+				resv, pages_per_huge_page(h));
 		/* pages_per_hpage should be the same for all entries in
 		 * a resv_map.
 		 */
-		VM_BUG_ON(resv->pages_per_hpage != pages_per_huge_page(h));
+		VM_BUG_ON(hugetlb_resv_map_pages_per_hpage(resv) !=
+			  pages_per_huge_page(h));
 	} else {
-		nrg->reservation_counter = NULL;
-		nrg->css = NULL;
+		hugetlb_file_region_set_reservation_counter(nrg, NULL);
+		hugetlb_file_region_set_css(nrg, NULL);
 	}
 #endif
 }
@@ -502,8 +553,8 @@ static void record_hugetlb_cgroup_uncharge_info(struct hugetlb_cgroup *h_cg,
 static void put_uncharge_info(struct file_region *rg)
 {
 #ifdef CONFIG_CGROUP_HUGETLB
-	if (rg->css)
-		css_put(rg->css);
+	if (hugetlb_file_region_css(rg))
+		css_put(hugetlb_file_region_css(rg));
 #endif
 }
 
@@ -511,8 +562,9 @@ static bool has_same_uncharge_info(struct file_region *rg,
 				   struct file_region *org)
 {
 #ifdef CONFIG_CGROUP_HUGETLB
-	return rg->reservation_counter == org->reservation_counter &&
-	       rg->css == org->css;
+	return hugetlb_file_region_reservation_counter(rg) ==
+		       hugetlb_file_region_reservation_counter(org) &&
+	       hugetlb_file_region_css(rg) == hugetlb_file_region_css(org);
 
 #else
 	return true;
@@ -530,7 +582,7 @@ static void coalesce_file_region(struct resv_map *resv, struct file_region *rg)
 
 		list_del(&rg->link);
 		put_uncharge_info(rg);
-		kfree(rg);
+		hugetlb_file_region_free(rg);
 
 		rg = prg;
 	}
@@ -542,7 +594,7 @@ static void coalesce_file_region(struct resv_map *resv, struct file_region *rg)
 
 		list_del(&rg->link);
 		put_uncharge_info(rg);
-		kfree(rg);
+		hugetlb_file_region_free(rg);
 	}
 }
 
@@ -666,7 +718,7 @@ static int allocate_file_region_entries(struct resv_map *resv,
 
 		spin_unlock(&resv->lock);
 		for (i = 0; i < to_allocate; i++) {
-			trg = kmalloc(sizeof(*trg), GFP_KERNEL);
+			trg = hugetlb_file_region_alloc(GFP_KERNEL);
 			if (!trg)
 				goto out_of_memory;
 			list_add(&trg->link, &allocated_regions);
@@ -683,7 +735,7 @@ static int allocate_file_region_entries(struct resv_map *resv,
 out_of_memory:
 	list_for_each_entry_safe(rg, trg, &allocated_regions, link) {
 		list_del(&rg->link);
-		kfree(rg);
+		hugetlb_file_region_free(rg);
 	}
 	return -ENOMEM;
 }
@@ -870,7 +922,7 @@ retry:
 
 			if (!nrg) {
 				spin_unlock(&resv->lock);
-				nrg = kmalloc(sizeof(*nrg), GFP_KERNEL);
+				nrg = hugetlb_file_region_alloc(GFP_KERNEL);
 				if (!nrg)
 					return -ENOMEM;
 				goto retry;
@@ -901,7 +953,7 @@ retry:
 			hugetlb_cgroup_uncharge_file_region(resv, rg,
 							    rg->to - rg->from, true);
 			list_del(&rg->link);
-			kfree(rg);
+			hugetlb_file_region_free(rg);
 			continue;
 		}
 
@@ -921,7 +973,7 @@ retry:
 	}
 
 	spin_unlock(&resv->lock);
-	kfree(nrg);
+	hugetlb_file_region_free(nrg);
 	return del;
 }
 
@@ -1001,7 +1053,9 @@ pgoff_t linear_hugepage_index(struct vm_area_struct *vma,
 {
 	return vma_hugecache_offset(hstate_vma(vma), vma, address);
 }
+#ifndef CONFIG_ANDROID_HUGETLB_KMI_EXT
 EXPORT_SYMBOL_GPL(linear_hugepage_index);
+#endif
 
 /**
  * vma_kernel_pagesize - Page size granularity for this VMA.
@@ -1018,7 +1072,9 @@ unsigned long vma_kernel_pagesize(struct vm_area_struct *vma)
 		return vma->vm_ops->pagesize(vma);
 	return PAGE_SIZE;
 }
+#ifndef CONFIG_ANDROID_HUGETLB_KMI_EXT
 EXPORT_SYMBOL_GPL(vma_kernel_pagesize);
+#endif
 
 /*
  * Return the page size being used by the MMU to back a VMA. In the majority
@@ -1077,26 +1133,27 @@ resv_map_set_hugetlb_cgroup_uncharge_info(struct resv_map *resv_map,
 {
 #ifdef CONFIG_CGROUP_HUGETLB
 	if (!h_cg || !h) {
-		resv_map->reservation_counter = NULL;
-		resv_map->pages_per_hpage = 0;
-		resv_map->css = NULL;
+		hugetlb_resv_map_set_reservation_counter(resv_map, NULL);
+		hugetlb_resv_map_set_pages_per_hpage(resv_map, 0);
+		hugetlb_resv_map_set_css(resv_map, NULL);
 	} else {
-		resv_map->reservation_counter =
-			&h_cg->rsvd_hugepage[hstate_index(h)];
-		resv_map->pages_per_hpage = pages_per_huge_page(h);
-		resv_map->css = &h_cg->css;
+		hugetlb_resv_map_set_reservation_counter(
+			resv_map, &h_cg->rsvd_hugepage[hstate_index(h)]);
+		hugetlb_resv_map_set_pages_per_hpage(
+			resv_map, pages_per_huge_page(h));
+		hugetlb_resv_map_set_css(resv_map, hugetlb_cgroup_css(h_cg));
 	}
 #endif
 }
 
 struct resv_map *resv_map_alloc(void)
 {
-	struct resv_map *resv_map = kmalloc(sizeof(*resv_map), GFP_KERNEL);
-	struct file_region *rg = kmalloc(sizeof(*rg), GFP_KERNEL);
+	struct resv_map *resv_map = hugetlb_resv_map_alloc();
+	struct file_region *rg = hugetlb_file_region_alloc(GFP_KERNEL);
 
 	if (!resv_map || !rg) {
-		kfree(resv_map);
-		kfree(rg);
+		hugetlb_resv_map_free(resv_map);
+		hugetlb_file_region_free(rg);
 		return NULL;
 	}
 
@@ -1133,12 +1190,12 @@ void resv_map_release(struct kref *ref)
 	/* ... and any entries left in the cache */
 	list_for_each_entry_safe(rg, trg, head, link) {
 		list_del(&rg->link);
-		kfree(rg);
+		hugetlb_file_region_free(rg);
 	}
 
 	VM_BUG_ON(resv_map->adds_in_progress);
 
-	kfree(resv_map);
+	hugetlb_resv_map_free(resv_map);
 }
 
 static inline struct resv_map *inode_resv_map(struct inode *inode)
@@ -2160,11 +2217,15 @@ retry:
 		node_set(nid, *node_alloc_noretry);
 
 	if (!page) {
+#ifndef CONFIG_ANDROID_HUGETLB_KMI_EXT
 		__count_vm_event(HTLB_BUDDY_PGALLOC_FAIL);
+#endif
 		return NULL;
 	}
 
+#ifndef CONFIG_ANDROID_HUGETLB_KMI_EXT
 	__count_vm_event(HTLB_BUDDY_PGALLOC);
+#endif
 	return page_folio(page);
 }
 
@@ -4757,7 +4818,7 @@ void hugetlb_show_meminfo_node(int nid)
 void hugetlb_report_usage(struct seq_file *m, struct mm_struct *mm)
 {
 	seq_printf(m, "HugetlbPages:\t%8lu kB\n",
-		   K(atomic_long_read(&mm->hugetlb_usage)));
+		   K(hugetlb_count_read(mm)));
 }
 
 /* Return the number pages of memory we physically have, in PAGE_SIZE units. */

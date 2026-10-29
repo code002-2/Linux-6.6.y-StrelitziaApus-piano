@@ -10,7 +10,9 @@
 #include <linux/netfilter/nf_tables.h>
 #include <linux/u64_stats_sync.h>
 #include <linux/rhashtable.h>
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 #include <net/netfilter/nf_flow_table.h>
+#endif
 #include <net/netlink.h>
 #include <net/flow_offload.h>
 #include <net/netns/generic.h>
@@ -18,6 +20,8 @@
 #define NFT_MAX_HOOKS	(NF_INET_INGRESS + 1)
 
 struct module;
+struct nft_flowtable;
+struct nf_flowtable_type;
 
 #define NFT_JUMP_STACK_SIZE	16
 
@@ -1432,7 +1436,7 @@ void nft_unregister_obj(struct nft_object_type *obj_type);
 
 #define NFT_NETDEVICE_MAX	256
 
-/**
+/*
  *	struct nft_flowtable - nf_tables flow table
  *
  *	@list: flow table list node in table list
@@ -1446,6 +1450,7 @@ void nft_unregister_obj(struct nft_object_type *obj_type);
  *	@hook_list: hook list for hooks per net_device in flowtables
  *	@data: rhashtable and garbage collector
  */
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 struct nft_flowtable {
 	struct list_head		list;
 	struct nft_table		*table;
@@ -1470,6 +1475,7 @@ void nf_tables_deactivate_flowtable(const struct nft_ctx *ctx,
 
 void nft_register_flowtable_type(struct nf_flowtable_type *type);
 void nft_unregister_flowtable_type(struct nf_flowtable_type *type);
+#endif
 
 /**
  *	struct nft_traceinfo - nft tracing information and state
@@ -1512,6 +1518,9 @@ void nft_trace_notify(const struct nft_pktinfo *pkt,
 
 #if IS_ENABLED(CONFIG_NF_TABLES)
 
+static inline u8 nft_gencursor(const struct net *net);
+static inline void nft_gencursor_set(struct net *net, u8 cursor);
+
 /*
  * The gencursor defines two generations, the currently active and the
  * next one. Objects contain a bitmask of 2 bits specifying the generations
@@ -1526,7 +1535,7 @@ void nft_trace_notify(const struct nft_pktinfo *pkt,
  */
 static inline unsigned int nft_gencursor_next(const struct net *net)
 {
-	return net->nft.gencursor + 1 == 1 ? 1 : 0;
+	return nft_gencursor(net) + 1 == 1 ? 1 : 0;
 }
 
 static inline u8 nft_genmask_next(const struct net *net)
@@ -1536,8 +1545,7 @@ static inline u8 nft_genmask_next(const struct net *net)
 
 static inline u8 nft_genmask_cur(const struct net *net)
 {
-	/* Use READ_ONCE() to prevent refetching the value for atomicity */
-	return 1 << READ_ONCE(net->nft.gencursor);
+	return 1 << nft_gencursor(net);
 }
 
 #define NFT_GENMASK_ANY		((1 << 0) | (1 << 1))
@@ -1737,6 +1745,7 @@ struct nft_trans_obj {
 #define nft_trans_obj_update(trans)	\
 	(((struct nft_trans_obj *)trans->data)->update)
 
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 struct nft_trans_flowtable {
 	struct nft_flowtable		*flowtable;
 	bool				update;
@@ -1752,6 +1761,7 @@ struct nft_trans_flowtable {
 	(((struct nft_trans_flowtable *)trans->data)->hook_list)
 #define nft_trans_flowtable_flags(trans)	\
 	(((struct nft_trans_flowtable *)trans->data)->flags)
+#endif
 
 #define NFT_TRANS_GC_BATCHCOUNT	256
 
@@ -1820,6 +1830,9 @@ struct nftables_pernet {
 	unsigned int		base_seq;
 	unsigned int		gc_seq;
 	u8			validate_state;
+#if IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
+	u8			gencursor;
+#endif
 };
 
 extern unsigned int nf_tables_net_id;
@@ -1828,6 +1841,26 @@ static inline struct nftables_pernet *nft_pernet(const struct net *net)
 {
 	return net_generic(net, nf_tables_net_id);
 }
+
+#if IS_ENABLED(CONFIG_NF_TABLES)
+static inline u8 nft_gencursor(const struct net *net)
+{
+#if IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
+	return READ_ONCE(nft_pernet(net)->gencursor);
+#else
+	return READ_ONCE(net->nft.gencursor);
+#endif
+}
+
+static inline void nft_gencursor_set(struct net *net, u8 cursor)
+{
+#if IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
+	WRITE_ONCE(nft_pernet(net)->gencursor, cursor);
+#else
+	WRITE_ONCE(net->nft.gencursor, cursor);
+#endif
+}
+#endif
 
 static inline u64 nft_net_tstamp(const struct net *net)
 {

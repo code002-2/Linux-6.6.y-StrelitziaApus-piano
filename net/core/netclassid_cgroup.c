@@ -13,6 +13,7 @@
 #include <net/cls_cgroup.h>
 #include <net/sock.h>
 
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT)
 static inline struct cgroup_cls_state *css_cls_state(struct cgroup_subsys_state *css)
 {
 	return css ? container_of(css, struct cgroup_cls_state, css) : NULL;
@@ -144,3 +145,65 @@ struct cgroup_subsys net_cls_cgrp_subsys = {
 	.attach			= cgrp_attach,
 	.legacy_cftypes		= ss_files,
 };
+#else
+
+static_assert(sizeof(struct sock_cgroup_data) == 16,
+	"Android net_cls must preserve struct sock_cgroup_data size");
+static_assert(offsetof(struct sock_cgroup_data, cgroup) == 0,
+	"Android net_cls must preserve sock cgroup offset");
+static_assert(offsetof(struct sock_cgroup_data, prioidx) == 8,
+	"Android net_cls must preserve sock priority offset");
+static_assert(ANDROID_SOCK_CGROUP_CLASSID_OFFSET ==
+	      offsetof(struct sock_cgroup_data, prioidx) + sizeof(u16) + 2,
+	"Android net_cls must use sock cgroup tail padding");
+static_assert(ANDROID_SOCK_CGROUP_CLASSID_OFFSET + sizeof(u32) ==
+	      sizeof(struct sock_cgroup_data),
+	"Android net_cls classid must end at the frozen sock layout");
+
+/*
+ * Updating open sockets follows the native net_cls batching behavior.  The
+ * cgroup sidecar chooses the classid; this code only propagates it to the
+ * socket storage that packet classifiers and netfilter inspect.
+ */
+struct update_classid_context {
+	u32 classid;
+	unsigned int batch;
+};
+
+#define UPDATE_CLASSID_BATCH 1000
+
+static int update_classid_sock(const void *v, struct file *file, unsigned int n)
+{
+	struct update_classid_context *ctx = (void *)v;
+	struct socket *sock = sock_from_file(file);
+
+	if (sock)
+		sock_cgroup_set_classid(&sock->sk->sk_cgrp_data, ctx->classid);
+	if (--ctx->batch == 0) {
+		ctx->batch = UPDATE_CLASSID_BATCH;
+		return n + 1;
+	}
+	return 0;
+}
+
+static void update_classid_task(struct task_struct *p, u32 classid)
+{
+	struct update_classid_context ctx = {
+		.classid = classid,
+		.batch = UPDATE_CLASSID_BATCH,
+	};
+	unsigned int fd = 0;
+
+	do {
+		task_lock(p);
+		fd = iterate_fd(p->files, fd, update_classid_sock, &ctx);
+		task_unlock(p);
+		cond_resched();
+	} while (fd);
+}
+
+void android_cgroup_net_cls_update_task(struct task_struct *task)
+{
+	update_classid_task(task, android_cgroup_net_cls_task_classid(task));
+}
+#endif

@@ -58,13 +58,13 @@ ipvs_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	bool match = true;
 
 	if (data->bitmask == XT_IPVS_IPVS_PROPERTY) {
-		match = skb->ipvs_property ^
+		match = skb_ipvs_property(skb) ^
 			!!(data->invert & XT_IPVS_IPVS_PROPERTY);
 		goto out;
 	}
 
 	/* other flags than XT_IPVS_IPVS_PROPERTY are set */
-	if (!skb->ipvs_property) {
+	if (!skb_ipvs_property(skb)) {
 		match = false;
 		goto out;
 	}

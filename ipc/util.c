@@ -45,6 +45,8 @@
  */
 
 #include <linux/mm.h>
+#include <linux/sched.h>
+#include <linux/sem.h>
 #include <linux/shm.h>
 #include <linux/init.h>
 #include <linux/msg.h>
@@ -76,6 +78,94 @@ struct ipc_proc_iface {
 	int ids;
 	int (*show)(struct seq_file *, void *);
 };
+
+#ifdef CONFIG_SYSVIPC
+#ifdef CONFIG_ANDROID_KABI_RESERVE
+struct android_sysv_task_ext {
+	struct sysv_sem sem;
+	struct sysv_shm shm;
+};
+
+static struct android_sysv_task_ext *android_sysv_task_ext(struct task_struct *tsk)
+{
+	return (void *)(unsigned long)
+		READ_ONCE(tsk->android_kabi_reserved6);
+}
+#endif
+
+int sysv_task_fork_init(struct task_struct *tsk)
+{
+#ifdef CONFIG_ANDROID_KABI_RESERVE
+	/* dup_task_struct() copied the parent's private sidecar pointer. */
+	WRITE_ONCE(tsk->android_kabi_reserved6, 0);
+	return 0;
+#else
+	tsk->sysvsem.undo_list = NULL;
+	INIT_LIST_HEAD(&tsk->sysvshm.shm_clist);
+	return 0;
+#endif
+}
+
+int sysv_task_init(struct task_struct *tsk)
+{
+#ifdef CONFIG_ANDROID_KABI_RESERVE
+	struct android_sysv_task_ext *ext;
+
+	ext = android_sysv_task_ext(tsk);
+	if (ext)
+		return 0;
+
+	ext = kzalloc(sizeof(*ext), GFP_KERNEL_ACCOUNT);
+	if (!ext)
+		return -ENOMEM;
+	INIT_LIST_HEAD(&ext->shm.shm_clist);
+	WRITE_ONCE(tsk->android_kabi_reserved6, (unsigned long)ext);
+#endif
+	return 0;
+}
+
+void sysv_task_free(struct task_struct *tsk)
+{
+#ifdef CONFIG_ANDROID_KABI_RESERVE
+	struct android_sysv_task_ext *ext = android_sysv_task_ext(tsk);
+
+	WRITE_ONCE(tsk->android_kabi_reserved6, 0);
+	kfree(ext);
+#endif
+}
+
+struct sysv_sem *sysv_task_sem(struct task_struct *tsk)
+{
+#ifdef CONFIG_ANDROID_KABI_RESERVE
+	struct android_sysv_task_ext *ext = android_sysv_task_ext(tsk);
+
+	return ext ? &ext->sem : NULL;
+#else
+	return &tsk->sysvsem;
+#endif
+}
+
+struct sysv_shm *sysv_task_shm(struct task_struct *tsk)
+{
+#ifdef CONFIG_ANDROID_KABI_RESERVE
+	struct android_sysv_task_ext *ext = android_sysv_task_ext(tsk);
+
+	return ext ? &ext->shm : NULL;
+#else
+	return &tsk->sysvshm;
+#endif
+}
+
+void shm_init_task(struct task_struct *tsk)
+{
+	struct sysv_shm *shm;
+
+	shm = sysv_task_shm(tsk);
+	if (!shm)
+		return;
+	INIT_LIST_HEAD(&shm->shm_clist);
+}
+#endif
 
 /**
  * ipc_init - initialise ipc subsystem
