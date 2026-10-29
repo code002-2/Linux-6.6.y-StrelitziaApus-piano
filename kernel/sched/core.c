@@ -382,17 +382,6 @@ static void __sched_core_flip(bool enabled)
 
 		sched_core_lock(cpu, &flags);
 
-		/*
-		 * A core-wide selection may have the shared rq lock temporarily
-		 * released by a lock-dropping ->pick_task(). Flipping would
-		 * rebind rq_lockp() under it. Wait it out.
-		 */
-		while (cpu_rq(cpu)->core->core_pick_in_flight) {
-			sched_core_unlock(cpu, &flags);
-			cpu_relax();
-			sched_core_lock(cpu, &flags);
-		}
-
 		for_each_cpu(t, smt_mask)
 			cpu_rq(t)->core_enabled = enabled;
 
@@ -6270,8 +6259,6 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 		return __pick_next_task(rq, prev, rf);
 	}
 
-	rq->core->core_pick_in_flight++;
-
 	/*
 	 * If there were no {en,de}queues since we picked (IOW, the task
 	 * pointers are all still valid), and we haven't scheduled the last
@@ -6465,7 +6452,6 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 out_set_next:
 	set_next_task(rq, next);
 out:
-	rq->core->core_pick_in_flight--;
 	if (rq->core->core_forceidle_count && next == rq->idle)
 		queue_core_balance(rq);
 
@@ -6661,13 +6647,6 @@ static void sched_core_cpu_deactivate(unsigned int cpu)
 	core_rq->core_forceidle_count      = rq->core_forceidle_count;
 	core_rq->core_forceidle_seq        = rq->core_forceidle_seq;
 	core_rq->core_forceidle_occupation = rq->core_forceidle_occupation;
-
-	/*
-	 * A stale leftover would bias the count forever if this CPU later
-	 * returns as its own leader. Move, don't copy.
-	 */
-	core_rq->core_pick_in_flight       = rq->core_pick_in_flight;
-	rq->core_pick_in_flight            = 0;
 
 	/*
 	 * Accounting edge for forced idle is handled in pick_next_task().
@@ -7761,35 +7740,6 @@ static void __setscheduler_params(struct task_struct *p,
 	set_load_weight(p, true);
 }
 
-#ifdef CONFIG_RT_MUTEXES
-static inline void __setscheduler_dl_pi(int newprio, int policy,
-					struct task_struct *p,
-					int *queue_flags)
-{
-	/*
-	 * In case a DEADLINE task (either proper or boosted) gets
-	 * setscheduled to a lower priority class, check if it neeeds to
-	 * inherit parameters from a potential pi_task. In that case make
-	 * sure replenishment happens with the next enqueue.
-	 */
-
-	if (dl_prio(newprio) && !dl_policy(policy)) {
-		struct task_struct *pi_task = rt_mutex_get_top_task(p);
-
-		if (pi_task) {
-			p->dl.pi_se = pi_task->dl.pi_se;
-			*queue_flags |= ENQUEUE_REPLENISH;
-		}
-	}
-}
-#else /* !CONFIG_RT_MUTEXES */
-static inline void __setscheduler_dl_pi(int newprio, int policy,
-					struct task_struct *p,
-					int *queue_flags)
-{
-}
-#endif /* !CONFIG_RT_MUTEXES */
-
 /*
  * Check the target process has a UID that matches the current process's:
  */
@@ -8058,7 +8008,6 @@ change:
 		dequeue_task(rq, p, queue_flags);
 	if (running)
 		put_prev_task(rq, p);
-		__setscheduler_dl_pi(newprio, policy, p, &queue_flags);
 
 	prev_class = p->sched_class;
 
@@ -8611,7 +8560,7 @@ __sched_setaffinity(struct task_struct *p, struct affinity_context *ctx)
 			bool empty = !cpumask_and(new_mask, new_mask,
 						  ctx->user_mask);
 
-			if (empty)
+			if (WARN_ON_ONCE(empty))
 				cpumask_copy(new_mask, cpus_allowed);
 		}
 		__set_cpus_allowed_ptr(p, ctx);
@@ -10381,7 +10330,6 @@ void __init sched_init(void)
 		rq->core_forceidle_count = 0;
 		rq->core_forceidle_occupation = 0;
 		rq->core_forceidle_start = 0;
-		rq->core_pick_in_flight = 0;
 
 		rq->core_cookie = 0UL;
 #endif

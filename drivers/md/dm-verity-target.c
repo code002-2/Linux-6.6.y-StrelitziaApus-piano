@@ -997,14 +997,6 @@ static void verity_status(struct dm_target *ti, status_type_t type,
 }
 
 static int verity_prepare_ioctl(struct dm_target *ti, struct block_device **bdev)
-
-	/*
-	 * Similar to what dm-crypt does, opt dm-verity out of support for
-	 * direct I/O that is aligned to less than the traditional direct I/O
-	 * alignment requirement of logical_block_size.  This prevents dm-verity
-	 * data blocks from crossing pages, eliminating various edge cases.
-	 */
-	limits->dma_alignment = limits->logical_block_size - 1;
 {
 	struct dm_verity *v = ti->private;
 
@@ -1033,7 +1025,7 @@ static void verity_io_hints(struct dm_target *ti, struct queue_limits *limits)
 	if (limits->physical_block_size < 1 << v->data_dev_block_bits)
 		limits->physical_block_size = 1 << v->data_dev_block_bits;
 
-	limits->io_min = limits->logical_block_size;
+	blk_limits_io_min(limits, limits->logical_block_size);
 
 	limits->dma_alignment = limits->logical_block_size - 1;
 }
