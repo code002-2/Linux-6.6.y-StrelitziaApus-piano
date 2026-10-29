@@ -81,7 +81,6 @@
 	FN(IPV6_NDISC_NS_OTHERHOST)	\
 	FN(QUEUE_PURGE)			\
 	FNe(MAX)
-	FN(PACKET_SOCK_ERROR)		\
 
 /**
  * enum skb_drop_reason - the reasons of skb drops
@@ -349,11 +348,6 @@ enum skb_drop_reason {
 	/**
 	 * @SKB_DROP_REASON_MAX: the maximum of core drop reasons, which
 	 * shouldn't be used as a real 'reason' - only for tracing code gen
-	/**
-	 * @SKB_DROP_REASON_PACKET_SOCK_ERROR: generic packet socket errors
-	 * after its filter matches an incoming packet.
-	 */
-	SKB_DROP_REASON_PACKET_SOCK_ERROR,
 	 */
 	SKB_DROP_REASON_MAX,
 
