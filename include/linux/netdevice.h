@@ -1324,9 +1324,6 @@ struct netdev_net_notifier {
  * int (*ndo_mdb_del)(struct net_device *dev, struct nlattr *tb[],
  *		      struct netlink_ext_ack *extack);
  *	Deletes the MDB entry from dev.
- * int (*ndo_mdb_del_bulk)(struct net_device *dev, struct nlattr *tb[],
- *			   struct netlink_ext_ack *extack);
- *	Bulk deletes MDB entries from dev.
  * int (*ndo_mdb_dump)(struct net_device *dev, struct sk_buff *skb,
  *		       struct netlink_callback *cb);
  *	Dumps MDB entries from dev. The first argument (marker) in the netlink
@@ -1611,16 +1608,9 @@ struct net_device_ops {
 	int			(*ndo_mdb_del)(struct net_device *dev,
 					       struct nlattr *tb[],
 					       struct netlink_ext_ack *extack);
-	int			(*ndo_mdb_del_bulk)(struct net_device *dev,
-						    struct nlattr *tb[],
-						    struct netlink_ext_ack *extack);
 	int			(*ndo_mdb_dump)(struct net_device *dev,
 						struct sk_buff *skb,
 						struct netlink_callback *cb);
-	int			(*ndo_mdb_get)(struct net_device *dev,
-					       struct nlattr *tb[], u32 portid,
-					       u32 seq,
-					       struct netlink_ext_ack *extack);
 	int			(*ndo_bridge_setlink)(struct net_device *dev,
 						      struct nlmsghdr *nlh,
 						      u16 flags,
