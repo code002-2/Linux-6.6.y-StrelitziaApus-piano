@@ -1590,6 +1590,8 @@ void fuse_free_conn(struct fuse_conn *fc)
 	idr_for_each(&fc->passthrough_req, free_fuse_passthrough, NULL);
 	idr_destroy(&fc->passthrough_req);
 	kfree(fc);
+	if (!root)
+		return -ENOMEM;
 }
 EXPORT_SYMBOL_GPL(fuse_free_conn);
 
