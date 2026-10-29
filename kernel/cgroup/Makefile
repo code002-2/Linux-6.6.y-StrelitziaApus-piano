@@ -2,7 +2,9 @@
 obj-y := cgroup.o rstat.o namespace.o cgroup-v1.o freezer.o
 
 obj-$(CONFIG_CGROUP_FREEZER) += legacy_freezer.o
+ifneq ($(CONFIG_ANDROID_CGROUP_PIDS_KMI_EXT),y)
 obj-$(CONFIG_CGROUP_PIDS) += pids.o
+endif
 obj-$(CONFIG_CGROUP_RDMA) += rdma.o
 obj-$(CONFIG_CPUSETS) += cpuset.o cpuset-v1.o
 obj-$(CONFIG_CGROUP_MISC) += misc.o

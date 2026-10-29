@@ -574,7 +574,7 @@ static void ip_copy_metadata(struct sk_buff *to, struct sk_buff *from)
 	nf_copy(to, from);
 	skb_ext_copy(to, from);
 #if IS_ENABLED(CONFIG_IP_VS)
-	to->ipvs_property = from->ipvs_property;
+	skb_copy_ipvs_property(to, from);
 #endif
 	skb_copy_secmark(to, from);
 }

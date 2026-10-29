@@ -29,6 +29,9 @@
 
 /* Controllers blocked by the commandline in v1 */
 static u16 cgroup_no_v1_mask;
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+static bool cgroup_no_v1_net_cls;
+#endif
 
 /* disable named v1 mounts */
 static bool cgroup_no_v1_named;
@@ -871,6 +874,10 @@ static int cgroup1_show_options(struct seq_file *seq, struct kernfs_root *kf_roo
 	for_each_subsys(ss, ssid)
 		if (root->subsys_mask & (1 << ssid))
 			seq_show_option(seq, ss->legacy_name, NULL);
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (root->subsys_mask & ANDROID_CGROUP_NET_CLASSID_BIT)
+		seq_show_option(seq, "net_cls", NULL);
+#endif
 	if (root->flags & CGRP_ROOT_NOPREFIX)
 		seq_puts(seq, ",noprefix");
 	if (root->flags & CGRP_ROOT_XATTR)
@@ -934,6 +941,15 @@ int cgroup1_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		ret = vfs_parse_fs_param_source(fc, param);
 		if (ret != -ENOPARAM)
 			return ret;
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (!strcmp(param->key, "net_cls")) {
+			if (cgroup_no_v1_net_cls)
+				return invalfc(fc, "Disabled controller '%s'",
+					       param->key);
+			ctx->subsys_mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+			return 0;
+		}
+#endif
 		for_each_subsys(ss, i) {
 			if (strcmp(param->key, ss->legacy_name))
 				continue;
@@ -1026,6 +1042,11 @@ static int check_cgroupfs_options(struct fs_context *fc)
 #ifdef CONFIG_CPUSETS
 	mask = ~((u16)1 << cpuset_cgrp_id);
 #endif
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	mask &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+	if (!cgroup_no_v1_net_cls)
+		enabled |= ANDROID_CGROUP_NET_CLASSID_BIT;
+#endif
 	for_each_subsys(ss, i)
 		if (cgroup_ssid_enabled(i) && !cgroup1_ssid_disabled(i))
 			enabled |= 1 << i;
@@ -1106,9 +1127,33 @@ int cgroup1_reconfigure(struct fs_context *fc)
 		goto out_unlock;
 	}
 
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+	if (removed_mask & ANDROID_CGROUP_NET_CLASSID_BIT)
+		android_cgroup_net_cls_teardown_root(root);
+	if (added_mask & ANDROID_CGROUP_NET_CLASSID_BIT) {
+		root->subsys_mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+		ret = android_cgroup_net_cls_setup_root(root);
+		if (ret) {
+			root->subsys_mask &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+			goto out_unlock;
+		}
+	}
+#endif
+
 	ret = rebind_subsystems(root, added_mask);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (added_mask & ANDROID_CGROUP_NET_CLASSID_BIT)
+			android_cgroup_net_cls_teardown_root(root);
+		if (removed_mask & ANDROID_CGROUP_NET_CLASSID_BIT) {
+			root->subsys_mask |= ANDROID_CGROUP_NET_CLASSID_BIT;
+			if (WARN_ON(android_cgroup_net_cls_setup_root(root)))
+				root->subsys_mask &= ~ANDROID_CGROUP_NET_CLASSID_BIT;
+		}
+#endif
 		goto out_unlock;
+	}
 
 	WARN_ON(rebind_subsystems(&cgrp_dfl_root, removed_mask));
 
@@ -1290,6 +1335,9 @@ static int __init cgroup_no_v1(char *str)
 
 		if (!strcmp(token, "all")) {
 			cgroup_no_v1_mask = U16_MAX;
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+			cgroup_no_v1_net_cls = true;
+#endif
 			continue;
 		}
 
@@ -1297,6 +1345,13 @@ static int __init cgroup_no_v1(char *str)
 			cgroup_no_v1_named = true;
 			continue;
 		}
+
+#ifdef CONFIG_ANDROID_CGROUP_NET_CLASSID_KMI_EXT
+		if (!strcmp(token, "net_cls")) {
+			cgroup_no_v1_net_cls = true;
+			continue;
+		}
+#endif
 
 		for_each_subsys(ss, i) {
 			if (strcmp(token, ss->name) &&

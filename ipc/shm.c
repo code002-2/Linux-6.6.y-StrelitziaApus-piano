@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
+#include <linux/sem.h>
 #include <linux/shm.h>
 #include <linux/init.h>
 #include <linux/file.h>
@@ -443,18 +444,23 @@ void shm_destroy_orphaned(struct ipc_namespace *ns)
 /* Locking assumes this will only be called with task == current */
 void exit_shm(struct task_struct *task)
 {
+	struct sysv_shm *sysvshm = sysv_task_shm(task);
+
+	if (!sysvshm)
+		return;
+
 	for (;;) {
 		struct shmid_kernel *shp;
 		struct ipc_namespace *ns;
 
 		task_lock(task);
 
-		if (list_empty(&task->sysvshm.shm_clist)) {
+		if (list_empty(&sysvshm->shm_clist)) {
 			task_unlock(task);
 			break;
 		}
 
-		shp = list_first_entry(&task->sysvshm.shm_clist, struct shmid_kernel,
+		shp = list_first_entry(&sysvshm->shm_clist, struct shmid_kernel,
 				shm_clist);
 
 		/*
@@ -714,6 +720,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	size_t size = params->u.size;
 	int error;
 	struct shmid_kernel *shp;
+	struct sysv_shm *sysvshm;
 	size_t numpages = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	struct file *file;
 	char name[13];
@@ -728,6 +735,13 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	if (ns->shm_tot + numpages < ns->shm_tot ||
 			ns->shm_tot + numpages > ns->shm_ctlall)
 		return -ENOSPC;
+
+	error = sysv_task_init(current);
+	if (error)
+		return error;
+	sysvshm = sysv_task_shm(current);
+	if (WARN_ON_ONCE(!sysvshm))
+		return -ENOMEM;
 
 	shp = kmalloc(sizeof(*shp), GFP_KERNEL_ACCOUNT);
 	if (unlikely(!shp))
@@ -792,7 +806,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	shp->ns = ns;
 
 	task_lock(current);
-	list_add(&shp->shm_clist, &current->sysvshm.shm_clist);
+	list_add(&shp->shm_clist, &sysvshm->shm_clist);
 	task_unlock(current);
 
 	/*

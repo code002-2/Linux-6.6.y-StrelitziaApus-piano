@@ -473,6 +473,16 @@ config NETFILTER_SYNPROXY
 
 endif # NF_CONNTRACK
 
+config ANDROID_NFTABLES_KMI_EXT
+	def_bool y
+	depends on ANDROID_KABI_RESERVE
+	depends on ARM64 && 64BIT && !CPU_BIG_ENDIAN
+	help
+	  Keep nftables namespace state outside the frozen Android GKI struct
+	  net and leave nf_flowtable opaque.  The flowtable control plane is
+	  intentionally unavailable in this profile because exposing its runtime
+	  type changes the CRCs of existing GKI symbols.
+
 config NF_TABLES
 	select NETFILTER_NETLINK
 	select LIBCRC32C
@@ -731,6 +741,7 @@ config NF_FLOW_TABLE
 	depends on NETFILTER_INGRESS
 	depends on NF_CONNTRACK
 	depends on NF_TABLES
+	depends on !ANDROID_NFTABLES_KMI_EXT
 	help
 	  This option adds the flow table core infrastructure.
 

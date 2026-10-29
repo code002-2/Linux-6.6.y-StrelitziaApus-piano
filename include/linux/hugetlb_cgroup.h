@@ -18,6 +18,7 @@
 #include <linux/mmdebug.h>
 
 struct hugetlb_cgroup;
+struct cgroup;
 struct resv_map;
 struct file_region;
 
@@ -40,7 +41,12 @@ struct hugetlb_cgroup_per_node {
 };
 
 struct hugetlb_cgroup {
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+		/* The cgroup's own css pins this sidecar for page and reservation users. */
+		struct cgroup *cgroup;
+#else
 	struct cgroup_subsys_state css;
+#endif
 
 	/*
 	 * the counter to account for hugepages from hugetlb.
@@ -55,11 +61,11 @@ struct hugetlb_cgroup {
 	atomic_long_t events[HUGE_MAX_HSTATE][HUGETLB_NR_MEMORY_EVENTS];
 	atomic_long_t events_local[HUGE_MAX_HSTATE][HUGETLB_NR_MEMORY_EVENTS];
 
-	/* Handle for "hugetlb.events" */
+	/* The native controller stores cgroup_file handles in its css. */
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
 	struct cgroup_file events_file[HUGE_MAX_HSTATE];
-
-	/* Handle for "hugetlb.events.local" */
 	struct cgroup_file events_local_file[HUGE_MAX_HSTATE];
+#endif
 
 	struct hugetlb_cgroup_per_node *nodeinfo[];
 };
@@ -113,26 +119,33 @@ static inline void set_hugetlb_cgroup_rsvd(struct folio *folio,
 
 static inline bool hugetlb_cgroup_disabled(void)
 {
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_HUGETLB_KMI_EXT)
+	return false;
+#else
 	return !cgroup_subsys_enabled(hugetlb_cgrp_subsys);
+#endif
 }
+
+struct cgroup_subsys_state *
+hugetlb_cgroup_css(struct hugetlb_cgroup *h_cg);
 
 static inline void hugetlb_cgroup_put_rsvd_cgroup(struct hugetlb_cgroup *h_cg)
 {
-	css_put(&h_cg->css);
+	css_put(hugetlb_cgroup_css(h_cg));
 }
 
 static inline void resv_map_dup_hugetlb_cgroup_uncharge_info(
 						struct resv_map *resv_map)
 {
-	if (resv_map->css)
-		css_get(resv_map->css);
+	if (hugetlb_resv_map_css(resv_map))
+		css_get(hugetlb_resv_map_css(resv_map));
 }
 
 static inline void resv_map_put_hugetlb_cgroup_uncharge_info(
 						struct resv_map *resv_map)
 {
-	if (resv_map->css)
-		css_put(resv_map->css);
+	if (hugetlb_resv_map_css(resv_map))
+		css_put(hugetlb_resv_map_css(resv_map));
 }
 
 extern int hugetlb_cgroup_charge_cgroup(int idx, unsigned long nr_pages,
