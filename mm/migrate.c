@@ -1609,7 +1609,7 @@ static int migrate_hugetlbs(struct list_head *from, new_folio_t get_new_folio,
 
 			nr_pages = folio_nr_pages(folio);
 
-			cond_resched();
+			cond_resched_tasks_rcu_qs();
 
 			/*
 			 * Migratability of hugepages depends on architectures and
