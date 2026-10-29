@@ -14273,6 +14273,13 @@ static void reg_set_min_max(struct bpf_reg_state *true_reg,
 			false_32off = tnum_subreg(false_reg->var_off);
 		} else {
 			___mark_reg_known(false_reg, val);
+		/*
+		 * The low 32 bits of a valid pointer may well be zero, hence
+		 * nothing below applies to a 32-bit comparison.
+		 */
+		if (is_jmp32)
+			return -1;
+
 			false_64off = false_reg->var_off;
 		}
 		break;
