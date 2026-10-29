@@ -96,9 +96,9 @@ ssize_t usb_store_new_id(struct usb_dynids *dynids,
 		}
 	}
 
-	mutex_lock(&usb_dynids_lock);
+	spin_lock(&dynids->lock);
 	list_add_tail(&dynid->node, &dynids->list);
-	mutex_unlock(&usb_dynids_lock);
+	spin_unlock(&dynids->lock);
 
 	retval = driver_attach(driver);
 
@@ -161,7 +161,7 @@ static ssize_t remove_id_store(struct device_driver *driver, const char *buf,
 	if (fields < 2)
 		return -EINVAL;
 
-	guard(mutex)(&usb_dynids_lock);
+	spin_lock(&usb_driver->dynids.lock);
 	list_for_each_entry_safe(dynid, n, &usb_driver->dynids.list, node) {
 		struct usb_device_id *id = &dynid->id;
 
@@ -172,6 +172,7 @@ static ssize_t remove_id_store(struct device_driver *driver, const char *buf,
 			break;
 		}
 	}
+	spin_unlock(&usb_driver->dynids.lock);
 	return count;
 }
 
@@ -220,11 +221,12 @@ static void usb_free_dynids(struct usb_driver *usb_drv)
 {
 	struct usb_dynid *dynid, *n;
 
-	guard(mutex)(&usb_dynids_lock);
+	spin_lock(&usb_drv->dynids.lock);
 	list_for_each_entry_safe(dynid, n, &usb_drv->dynids.list, node) {
 		list_del(&dynid->node);
 		kfree(dynid);
 	}
+	spin_unlock(&usb_drv->dynids.lock);
 }
 
 static const struct usb_device_id *usb_match_dynamic_id(struct usb_interface *intf,
@@ -232,12 +234,14 @@ static const struct usb_device_id *usb_match_dynamic_id(struct usb_interface *in
 {
 	struct usb_dynid *dynid;
 
-	guard(mutex)(&usb_dynids_lock);
+	spin_lock(&drv->dynids.lock);
 	list_for_each_entry(dynid, &drv->dynids.list, node) {
 		if (usb_match_one_id(intf, &dynid->id)) {
+			spin_unlock(&drv->dynids.lock);
 			return &dynid->id;
 		}
 	}
+	spin_unlock(&drv->dynids.lock);
 	return NULL;
 }
 
@@ -1053,6 +1057,7 @@ int usb_register_driver(struct usb_driver *new_driver, struct module *owner,
 	new_driver->drvwrap.driver.owner = owner;
 	new_driver->drvwrap.driver.mod_name = mod_name;
 	new_driver->drvwrap.driver.dev_groups = new_driver->dev_groups;
+	spin_lock_init(&new_driver->dynids.lock);
 	INIT_LIST_HEAD(&new_driver->dynids.list);
 
 	retval = driver_register(&new_driver->drvwrap.driver);
