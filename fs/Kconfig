@@ -28,6 +28,7 @@ config LEGACY_DIRECT_IO
 
 if BLOCK
 
+source "fs/zfs/Kconfig"
 source "fs/ext2/Kconfig"
 source "fs/ext4/Kconfig"
 source "fs/jbd2/Kconfig"
@@ -279,6 +280,17 @@ endif # HUGETLBFS
 
 config HUGETLB_PAGE
 	def_bool HUGETLBFS
+
+config ANDROID_HUGETLB_KMI_EXT
+	def_bool y
+	depends on HUGETLB_PAGE && ANDROID_KABI_RESERVE
+	depends on ARM64 && 64BIT && !CPU_BIG_ENDIAN
+	depends on AIO && PER_VMA_LOCK
+	help
+	  Keep HugeTLB per-mm accounting outside the frozen Android GKI
+	  mm_struct layout.  The counter is kept in a private sidecar whose
+	  pointer is split across two verified natural 32-bit alignment holes.
+	  This is restricted to the reviewed arm64 little-endian GKI layout.
 
 config HUGETLB_PAGE_OPTIMIZE_VMEMMAP
 	def_bool HUGETLB_PAGE

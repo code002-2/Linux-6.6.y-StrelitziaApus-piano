@@ -137,3 +137,5 @@ CONFIG_NFT_COMPAT=y
 # 因此 AppArmor 只会被编译进来、运行时不会激活（SELinux 保持生效）
 CONFIG_SECURITY_APPARMOR=y
 
+# ===== OpenZFS（built-in，kernel 侧；用户态工具另装）=====
+CONFIG_ZFS=m

@@ -419,7 +419,7 @@ void *perf_trace_buf_alloc(int size, struct pt_regs **regs, int *rctxp)
 	memset(&raw_data[size - sizeof(u64)], 0, sizeof(u64));
 	return raw_data;
 }
-EXPORT_SYMBOL_GPL(perf_trace_buf_alloc);
+EXPORT_SYMBOL(perf_trace_buf_alloc);  /* code002: 放开给 ZFS 模块 */
 NOKPROBE_SYMBOL(perf_trace_buf_alloc);
 
 void perf_trace_buf_update(void *record, u16 type)

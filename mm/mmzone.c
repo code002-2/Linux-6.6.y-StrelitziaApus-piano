@@ -16,7 +16,7 @@ void set_page_private(struct page *page, unsigned long private)
 	trace_android_vh_page_private_mod(page, private);
 	page->private = private;
 }
-EXPORT_SYMBOL_GPL(set_page_private);
+EXPORT_SYMBOL(set_page_private);  /* code002: 放开给 ZFS 模块 */
 
 struct pglist_data *first_online_pgdat(void)
 {

@@ -101,7 +101,7 @@ bool __trace_trigger_soft_disabled(struct trace_event_file *file)
 		return trace_event_ignore_this_pid(file);
 	return false;
 }
-EXPORT_SYMBOL_GPL(__trace_trigger_soft_disabled);
+EXPORT_SYMBOL(__trace_trigger_soft_disabled);  /* code002: 放开给 ZFS 模块 */
 
 /**
  * event_triggers_post_call - Call 'post_triggers' for a trace event

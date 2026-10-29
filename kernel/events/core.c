@@ -730,17 +730,193 @@ static void ctx_sched_in(struct perf_event_context *ctx, enum event_type_t event
 
 #ifdef CONFIG_CGROUP_PERF
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+/*
+ * Keep the frozen perf layouts byte-for-byte identical.  These slots are
+ * natural padding verified below; they are initialized before the event or
+ * context becomes visible and cleared after its users have drained.
+ */
+#define PERF_EVENT_CGRP_LO_OFFSET \
+	(offsetof(struct perf_event, mmap_count) + sizeof(atomic_t))
+#define PERF_EVENT_CGRP_HI_OFFSET \
+	(offsetof(struct perf_event, waitq) - sizeof(u32))
+#define PERF_CONTEXT_CGRP_COUNT_OFFSET \
+	(offsetof(struct perf_event_context, pin_count) + sizeof(int))
+
+static_assert(offsetof(struct perf_event, rb) -
+	      (offsetof(struct perf_event, mmap_count) + sizeof(atomic_t)) ==
+	      sizeof(u32),
+	"Android perf cgroup needs the first perf_event natural hole");
+static_assert(offsetof(struct perf_event, waitq) -
+	      (offsetof(struct perf_event, rcu_pending) + sizeof(int)) ==
+	      sizeof(u32),
+	"Android perf cgroup needs the second perf_event natural hole");
+static_assert(offsetof(struct perf_event_context, rcu_head) -
+	      (offsetof(struct perf_event_context, pin_count) + sizeof(int)) ==
+	      sizeof(int),
+	"Android perf cgroup needs the perf context natural hole");
+
+static __always_inline u32 *perf_event_cgrp_lo_slot(struct perf_event *event)
+{
+	return (u32 *)((char *)event + PERF_EVENT_CGRP_LO_OFFSET);
+}
+
+static __always_inline u32 *perf_event_cgrp_hi_slot(struct perf_event *event)
+{
+	return (u32 *)((char *)event + PERF_EVENT_CGRP_HI_OFFSET);
+}
+
+static __always_inline int *perf_context_cgrp_count_slot(struct perf_event_context *ctx)
+{
+	return (int *)((char *)ctx + PERF_CONTEXT_CGRP_COUNT_OFFSET);
+}
+
+static inline struct perf_cgroup *perf_event_cgrp(const struct perf_event *event)
+{
+	struct perf_event *mutable_event = (struct perf_event *)event;
+	u64 value;
+	u32 high, low;
+
+	high = READ_ONCE(*perf_event_cgrp_hi_slot(mutable_event));
+	if (!high)
+		return NULL;
+	smp_rmb();
+	low = READ_ONCE(*perf_event_cgrp_lo_slot(mutable_event));
+	value = ((u64)high << 32) | low;
+
+	return (struct perf_cgroup *)(unsigned long)value;
+}
+
+static inline void perf_event_set_cgrp(struct perf_event *event,
+					struct perf_cgroup *cgrp)
+{
+	u64 value = (unsigned long)cgrp;
+
+	if (!cgrp) {
+		WRITE_ONCE(*perf_event_cgrp_hi_slot(event), 0);
+		smp_wmb();
+		WRITE_ONCE(*perf_event_cgrp_lo_slot(event), 0);
+		return;
+	}
+
+	smp_wmb();
+	WRITE_ONCE(*perf_event_cgrp_lo_slot(event), lower_32_bits(value));
+	smp_wmb();
+	WRITE_ONCE(*perf_event_cgrp_hi_slot(event), upper_32_bits(value));
+}
+
+static inline int perf_context_nr_cgroups(struct perf_event_context *ctx)
+{
+	return READ_ONCE(*perf_context_cgrp_count_slot(ctx));
+}
+
+static inline int perf_context_nr_cgroups_inc(struct perf_event_context *ctx)
+{
+	return (*perf_context_cgrp_count_slot(ctx))++;
+}
+
+static inline int perf_context_nr_cgroups_dec(struct perf_event_context *ctx)
+{
+	return --(*perf_context_cgrp_count_slot(ctx));
+}
+
+static inline struct perf_cgroup *perf_cpu_context_cgrp(struct perf_cpu_context *cpuctx)
+{
+	/* perf_cpu_context is static per-CPU state; slot 1 is otherwise unused. */
+	return (struct perf_cgroup *)(unsigned long)
+		READ_ONCE(cpuctx->ctx.mutex.android_oem_data1[1]);
+}
+
+static inline void perf_cpu_context_set_cgrp(struct perf_cpu_context *cpuctx,
+					      struct perf_cgroup *cgrp)
+{
+	WRITE_ONCE(cpuctx->ctx.mutex.android_oem_data1[1],
+		   (u64)(unsigned long)cgrp);
+}
+
+struct perf_cgroup *
+perf_cgroup_from_task(struct task_struct *task, struct perf_event_context *ctx)
+{
+	struct css_set *cset;
+
+	cset = task_css_set_check(task, ctx ? lockdep_is_held(&ctx->lock) : true);
+	return android_cgroup_perf_kmi_get(cset->dfl_cgrp);
+}
+#else
+static inline struct perf_cgroup *perf_event_cgrp(const struct perf_event *event)
+{
+	return event->cgrp;
+}
+
+static inline void perf_event_set_cgrp(struct perf_event *event,
+					struct perf_cgroup *cgrp)
+{
+	event->cgrp = cgrp;
+}
+
+static inline int perf_context_nr_cgroups(struct perf_event_context *ctx)
+{
+	return ctx->nr_cgroups;
+}
+
+static inline int perf_context_nr_cgroups_inc(struct perf_event_context *ctx)
+{
+	return ctx->nr_cgroups++;
+}
+
+static inline int perf_context_nr_cgroups_dec(struct perf_event_context *ctx)
+{
+	return --ctx->nr_cgroups;
+}
+
+static inline struct perf_cgroup *perf_cpu_context_cgrp(struct perf_cpu_context *cpuctx)
+{
+	return READ_ONCE(cpuctx->cgrp);
+}
+
+static inline void perf_cpu_context_set_cgrp(struct perf_cpu_context *cpuctx,
+					      struct perf_cgroup *cgrp)
+{
+	WRITE_ONCE(cpuctx->cgrp, cgrp);
+}
+#endif
+
+static inline struct cgroup *perf_cgroup_cgroup(struct perf_cgroup *cgrp)
+{
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+	return cgrp->cgroup;
+#else
+	return cgrp->css.cgroup;
+#endif
+}
+
+static inline struct perf_cgroup *perf_cgroup_parent(struct perf_cgroup *cgrp)
+{
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+	struct cgroup *parent = cgroup_parent(cgrp->cgroup);
+
+	return parent ? android_cgroup_perf_kmi_get(parent) : NULL;
+#else
+	if (!cgrp->css.parent)
+		return NULL;
+	return container_of(cgrp->css.parent, struct perf_cgroup, css);
+#endif
+}
+
 static inline bool
 perf_cgroup_match(struct perf_event *event)
 {
 	struct perf_cpu_context *cpuctx = this_cpu_ptr(&perf_cpu_context);
+	struct perf_cgroup *event_cgrp = perf_event_cgrp(event);
+	struct perf_cgroup *cpu_cgrp;
 
 	/* @event doesn't care about cgroup */
-	if (!event->cgrp)
+	if (!event_cgrp)
 		return true;
 
 	/* wants specific cgroup scope but @cpuctx isn't associated with any */
-	if (!cpuctx->cgrp)
+	cpu_cgrp = perf_cpu_context_cgrp(cpuctx);
+	if (!cpu_cgrp)
 		return false;
 
 	/*
@@ -749,34 +925,45 @@ perf_cgroup_match(struct perf_event *event)
 	 * cgroup is a descendant of @event's (the test covers identity
 	 * case), it's a match.
 	 */
-	return cgroup_is_descendant(cpuctx->cgrp->css.cgroup,
-				    event->cgrp->css.cgroup);
+	return cgroup_is_descendant(perf_cgroup_cgroup(cpu_cgrp),
+				    perf_cgroup_cgroup(event_cgrp));
 }
 
 static inline void perf_detach_cgroup(struct perf_event *event)
 {
-	css_put(&event->cgrp->css);
-	event->cgrp = NULL;
+	struct perf_cgroup *cgrp = perf_event_cgrp(event);
+
+	if (!cgrp)
+		return;
+
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+	cgroup_put(perf_cgroup_cgroup(cgrp));
+#else
+	css_put(&cgrp->css);
+#endif
+	perf_event_set_cgrp(event, NULL);
 }
 
 static inline int is_cgroup_event(struct perf_event *event)
 {
-	return event->cgrp != NULL;
+	return perf_event_cgrp(event) != NULL;
 }
 
 static inline u64 perf_cgroup_event_time(struct perf_event *event)
 {
+	struct perf_cgroup *cgrp = perf_event_cgrp(event);
 	struct perf_cgroup_info *t;
 
-	t = per_cpu_ptr(event->cgrp->info, event->cpu);
+	t = per_cpu_ptr(cgrp->info, event->cpu);
 	return t->time;
 }
 
 static inline u64 perf_cgroup_event_time_now(struct perf_event *event, u64 now)
 {
+	struct perf_cgroup *cgrp = perf_event_cgrp(event);
 	struct perf_cgroup_info *t;
 
-	t = per_cpu_ptr(event->cgrp->info, event->cpu);
+	t = per_cpu_ptr(cgrp->info, event->cpu);
 	if (!__load_acquire(&t->active))
 		return t->time;
 	now += READ_ONCE(t->timeoffset);
@@ -796,15 +983,13 @@ static inline void __update_cgrp_time(struct perf_cgroup_info *info, u64 now, bo
 
 static inline void update_cgrp_time_from_cpuctx(struct perf_cpu_context *cpuctx, bool final)
 {
-	struct perf_cgroup *cgrp = cpuctx->cgrp;
-	struct cgroup_subsys_state *css;
+	struct perf_cgroup *cgrp = perf_cpu_context_cgrp(cpuctx);
 	struct perf_cgroup_info *info;
 
 	if (cgrp) {
 		u64 now = perf_clock();
 
-		for (css = &cgrp->css; css; css = css->parent) {
-			cgrp = container_of(css, struct perf_cgroup, css);
+		for (; cgrp; cgrp = perf_cgroup_parent(cgrp)) {
 			info = this_cpu_ptr(cgrp->info);
 
 			__update_cgrp_time(info, now, true);
@@ -816,6 +1001,7 @@ static inline void update_cgrp_time_from_cpuctx(struct perf_cpu_context *cpuctx,
 
 static inline void update_cgrp_time_from_event(struct perf_event *event)
 {
+	struct perf_cgroup *cgrp;
 	struct perf_cgroup_info *info;
 
 	/*
@@ -825,7 +1011,8 @@ static inline void update_cgrp_time_from_event(struct perf_event *event)
 	if (!is_cgroup_event(event))
 		return;
 
-	info = this_cpu_ptr(event->cgrp->info);
+	cgrp = perf_event_cgrp(event);
+	info = this_cpu_ptr(cgrp->info);
 	/*
 	 * Do not update time when cgroup is not active
 	 */
@@ -837,9 +1024,8 @@ static inline void
 perf_cgroup_set_timestamp(struct perf_cpu_context *cpuctx)
 {
 	struct perf_event_context *ctx = &cpuctx->ctx;
-	struct perf_cgroup *cgrp = cpuctx->cgrp;
+	struct perf_cgroup *cgrp = perf_cpu_context_cgrp(cpuctx);
 	struct perf_cgroup_info *info;
-	struct cgroup_subsys_state *css;
 
 	/*
 	 * ctx->lock held by caller
@@ -849,10 +1035,9 @@ perf_cgroup_set_timestamp(struct perf_cpu_context *cpuctx)
 	if (!cgrp)
 		return;
 
-	WARN_ON_ONCE(!ctx->nr_cgroups);
+	WARN_ON_ONCE(!perf_context_nr_cgroups(ctx));
 
-	for (css = &cgrp->css; css; css = css->parent) {
-		cgrp = container_of(css, struct perf_cgroup, css);
+	for (; cgrp; cgrp = perf_cgroup_parent(cgrp)) {
 		info = this_cpu_ptr(cgrp->info);
 		__update_cgrp_time(info, ctx->timestamp, false);
 		__store_release(&info->active, 1);
@@ -871,21 +1056,21 @@ static void perf_cgroup_switch(struct task_struct *task)
 	 * cpuctx->cgrp is set when the first cgroup event enabled,
 	 * and is cleared when the last cgroup event disabled.
 	 */
-	if (READ_ONCE(cpuctx->cgrp) == NULL)
+	if (!perf_cpu_context_cgrp(cpuctx))
 		return;
 
 	cgrp = perf_cgroup_from_task(task, NULL);
-	if (READ_ONCE(cpuctx->cgrp) == cgrp)
+	if (perf_cpu_context_cgrp(cpuctx) == cgrp)
 		return;
 
 	guard(perf_ctx_lock)(cpuctx, cpuctx->task_ctx);
 	/*
 	 * Re-check, could've raced vs perf_remove_from_context().
 	 */
-	if (READ_ONCE(cpuctx->cgrp) == NULL)
+	if (!perf_cpu_context_cgrp(cpuctx))
 		return;
 
-	WARN_ON_ONCE(cpuctx->ctx.nr_cgroups == 0);
+	WARN_ON_ONCE(perf_context_nr_cgroups(&cpuctx->ctx) == 0);
 
 	perf_ctx_disable(&cpuctx->ctx, true);
 
@@ -895,7 +1080,7 @@ static void perf_cgroup_switch(struct task_struct *task)
 	 * to update_cgrp_time_from_cpuctx() in
 	 * ctx_sched_out()
 	 */
-	cpuctx->cgrp = cgrp;
+	perf_cpu_context_set_cgrp(cpuctx, cgrp);
 	/*
 	 * set cgrp before ctxsw in to allow
 	 * perf_cgroup_set_timestamp() in ctx_sched_in()
@@ -907,7 +1092,7 @@ static void perf_cgroup_switch(struct task_struct *task)
 }
 
 static int perf_cgroup_ensure_storage(struct perf_event *event,
-				struct cgroup_subsys_state *css)
+					struct perf_cgroup *cgrp)
 {
 	struct perf_cpu_context *cpuctx;
 	struct perf_event **storage;
@@ -917,7 +1102,7 @@ static int perf_cgroup_ensure_storage(struct perf_event *event,
 	 * Allow storage to have sufficent space for an iterator for each
 	 * possibly nested cgroup plus an iterator for events with no cgroup.
 	 */
-	for (heap_size = 1; css; css = css->parent)
+	for (heap_size = 1; cgrp; cgrp = perf_cgroup_parent(cgrp))
 		heap_size++;
 
 	for_each_possible_cpu(cpu) {
@@ -952,10 +1137,31 @@ static inline int perf_cgroup_connect(int fd, struct perf_event *event,
 				      struct perf_event *group_leader)
 {
 	struct perf_cgroup *cgrp;
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+	struct cgroup *cgroup;
+#else
 	struct cgroup_subsys_state *css;
 	struct fd f = fdget(fd);
+#endif
 	int ret = 0;
 
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+	cgroup = cgroup_get_from_fd(fd);
+	if (IS_ERR(cgroup))
+		return PTR_ERR(cgroup);
+
+	cgrp = android_cgroup_perf_kmi_get(cgroup);
+	if (!cgrp) {
+		cgroup_put(cgroup);
+		return -ENOENT;
+	}
+
+	ret = perf_cgroup_ensure_storage(event, cgrp);
+	if (ret) {
+		cgroup_put(cgroup);
+		return ret;
+	}
+#else
 	if (!f.file)
 		return -EBADF;
 
@@ -966,24 +1172,28 @@ static inline int perf_cgroup_connect(int fd, struct perf_event *event,
 		goto out;
 	}
 
-	ret = perf_cgroup_ensure_storage(event, css);
+	ret = perf_cgroup_ensure_storage(event,
+					container_of(css, struct perf_cgroup, css));
 	if (ret)
 		goto out;
 
 	cgrp = container_of(css, struct perf_cgroup, css);
-	event->cgrp = cgrp;
+#endif
+	perf_event_set_cgrp(event, cgrp);
 
 	/*
 	 * all events in a group must monitor
 	 * the same cgroup because a task belongs
 	 * to only one perf cgroup at a time
 	 */
-	if (group_leader && group_leader->cgrp != cgrp) {
+	if (group_leader && perf_event_cgrp(group_leader) != cgrp) {
 		perf_detach_cgroup(event);
 		ret = -EINVAL;
 	}
+#if !IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
 out:
 	fdput(f);
+#endif
 	return ret;
 }
 
@@ -1003,10 +1213,10 @@ perf_cgroup_event_enable(struct perf_event *event, struct perf_event_context *ct
 	 */
 	cpuctx = container_of(ctx, struct perf_cpu_context, ctx);
 
-	if (ctx->nr_cgroups++)
+	if (perf_context_nr_cgroups_inc(ctx))
 		return;
 
-	cpuctx->cgrp = perf_cgroup_from_task(current, ctx);
+	perf_cpu_context_set_cgrp(cpuctx, perf_cgroup_from_task(current, ctx));
 }
 
 static inline void
@@ -1025,10 +1235,10 @@ perf_cgroup_event_disable(struct perf_event *event, struct perf_event_context *c
 	 */
 	cpuctx = container_of(ctx, struct perf_cpu_context, ctx);
 
-	if (--ctx->nr_cgroups)
+	if (perf_context_nr_cgroups_dec(ctx))
 		return;
 
-	cpuctx->cgrp = NULL;
+	perf_cpu_context_set_cgrp(cpuctx, NULL);
 }
 
 #else /* !CONFIG_CGROUP_PERF */
@@ -1585,8 +1795,8 @@ static inline struct cgroup *event_cgroup(const struct perf_event *event)
 	struct cgroup *cgroup = NULL;
 
 #ifdef CONFIG_CGROUP_PERF
-	if (event->cgrp)
-		cgroup = event->cgrp->css.cgroup;
+	if (perf_event_cgrp(event))
+		cgroup = perf_cgroup_cgroup(perf_event_cgrp(event));
 #endif
 
 	return cgroup;
@@ -2840,8 +3050,8 @@ static int  __perf_install_in_context(void *info)
 		 * cgroup, we should not try to schedule it.
 		 */
 		struct perf_cgroup *cgrp = perf_cgroup_from_task(current, ctx);
-		reprogram = cgroup_is_descendant(cgrp->css.cgroup,
-					event->cgrp->css.cgroup);
+		reprogram = cgroup_is_descendant(perf_cgroup_cgroup(cgrp),
+					perf_cgroup_cgroup(perf_event_cgrp(event)));
 	}
 #endif
 
@@ -3777,7 +3987,7 @@ static noinline int visit_groups_merge(struct perf_event_context *ctx,
 				void *data)
 {
 #ifdef CONFIG_CGROUP_PERF
-	struct cgroup_subsys_state *css = NULL;
+	struct perf_cgroup *cgrp = NULL;
 #endif
 	struct perf_cpu_context *cpuctx = NULL;
 	/* Space for per CPU and/or any CPU event iterators. */
@@ -3800,8 +4010,7 @@ static noinline int visit_groups_merge(struct perf_event_context *ctx,
 		lockdep_assert_held(&cpuctx->ctx.lock);
 
 #ifdef CONFIG_CGROUP_PERF
-		if (cpuctx->cgrp)
-			css = &cpuctx->cgrp->css;
+		cgrp = perf_cpu_context_cgrp(cpuctx);
 #endif
 	} else {
 		event_heap = (struct min_heap){
@@ -3817,8 +4026,9 @@ static noinline int visit_groups_merge(struct perf_event_context *ctx,
 	__heap_add(&event_heap, perf_event_groups_first(groups, cpu, pmu, NULL));
 
 #ifdef CONFIG_CGROUP_PERF
-	for (; css; css = css->parent)
-		__heap_add(&event_heap, perf_event_groups_first(groups, cpu, pmu, css->cgroup));
+	for (; cgrp; cgrp = perf_cgroup_parent(cgrp))
+		__heap_add(&event_heap, perf_event_groups_first(groups, cpu, pmu,
+						     perf_cgroup_cgroup(cgrp)));
 #endif
 
 	if (event_heap.nr) {
@@ -7851,7 +8061,11 @@ void perf_prepare_sample(struct perf_sample_data *data,
 		struct cgroup *cgrp;
 
 		/* protected by RCU */
+#if IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+		cgrp = perf_cgroup_cgroup(perf_cgroup_from_task(current, NULL));
+#else
 		cgrp = task_css_check(current, perf_event_cgrp_id, 1)->cgroup;
+#endif
 		data->cgroup = cgroup_id(cgrp);
 		data->sample_flags |= PERF_SAMPLE_CGROUP;
 	}
@@ -10260,7 +10474,7 @@ void perf_trace_run_bpf_submit(void *raw_data, int size, int rctx,
 	perf_tp_event(call->event.type, count, raw_data, size, regs, head,
 		      rctx, task);
 }
-EXPORT_SYMBOL_GPL(perf_trace_run_bpf_submit);
+EXPORT_SYMBOL(perf_trace_run_bpf_submit);  /* code002: 放开给 ZFS 模块 */
 
 static void __perf_tp_event_target_task(u64 count, void *record,
 					struct pt_regs *regs,
@@ -13936,7 +14150,70 @@ unlock:
 }
 device_initcall(perf_event_sysfs_init);
 
-#ifdef CONFIG_CGROUP_PERF
+#if IS_ENABLED(CONFIG_CGROUP_PERF) && \
+	IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
+int android_perf_cgroup_alloc(struct cgroup *cgrp)
+{
+	struct perf_cgroup *perf;
+	int ret;
+
+	if (WARN_ON_ONCE(android_cgroup_perf_kmi_get(cgrp)))
+		return -EBUSY;
+
+	perf = kzalloc(sizeof(*perf), GFP_KERNEL);
+	if (!perf)
+		return -ENOMEM;
+
+	perf->info = alloc_percpu(struct perf_cgroup_info);
+	if (!perf->info) {
+		kfree(perf);
+		return -ENOMEM;
+	}
+
+	perf->cgroup = cgrp;
+	ret = android_cgroup_perf_kmi_set(cgrp, perf);
+	if (ret) {
+		free_percpu(perf->info);
+		kfree(perf);
+	}
+	return ret;
+}
+
+void android_perf_cgroup_free(struct cgroup *cgrp)
+{
+	struct perf_cgroup *perf = android_cgroup_perf_kmi_take(cgrp);
+
+	if (!perf)
+		return;
+
+	free_percpu(perf->info);
+	kfree(perf);
+}
+
+void android_perf_cgroup_online(struct cgroup *cgrp)
+{
+	perf_event_cgroup(cgrp);
+}
+
+static int __android_perf_cgroup_move(void *info)
+{
+	struct task_struct *task = info;
+
+	preempt_disable();
+	perf_cgroup_switch(task);
+	preempt_enable();
+
+	return 0;
+}
+
+void android_perf_cgroup_migrate_task(struct task_struct *task)
+{
+	task_function_call(task, __android_perf_cgroup_move, task);
+}
+#endif
+
+#if IS_ENABLED(CONFIG_CGROUP_PERF) && \
+	!IS_ENABLED(CONFIG_ANDROID_CGROUP_PERF_KMI_EXT)
 static struct cgroup_subsys_state *
 perf_cgroup_css_alloc(struct cgroup_subsys_state *parent_css)
 {
@@ -14002,6 +14279,6 @@ struct cgroup_subsys perf_event_cgrp_subsys = {
 	.implicit_on_dfl = true,
 	.threaded	= true,
 };
-#endif /* CONFIG_CGROUP_PERF */
+#endif /* CONFIG_CGROUP_PERF && !CONFIG_ANDROID_CGROUP_PERF_KMI_EXT */
 
 DEFINE_STATIC_CALL_RET0(perf_snapshot_branch_stack, perf_snapshot_branch_stack_t);
