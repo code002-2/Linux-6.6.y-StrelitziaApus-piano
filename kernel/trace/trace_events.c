@@ -605,7 +605,7 @@ int trace_event_raw_init(struct trace_event_call *call)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(trace_event_raw_init);
+EXPORT_SYMBOL(trace_event_raw_init);  /* code002: 放开给 ZFS 模块 */
 
 bool trace_event_ignore_this_pid(struct trace_event_file *trace_file)
 {
@@ -656,7 +656,7 @@ void *trace_event_buffer_reserve(struct trace_event_buffer *fbuffer,
 	fbuffer->entry = ring_buffer_event_data(fbuffer->event);
 	return fbuffer->entry;
 }
-EXPORT_SYMBOL_GPL(trace_event_buffer_reserve);
+EXPORT_SYMBOL(trace_event_buffer_reserve);  /* code002: 放开给 ZFS 模块 */
 
 int trace_event_reg(struct trace_event_call *call,
 		    enum trace_reg type, void *data)
@@ -696,7 +696,7 @@ int trace_event_reg(struct trace_event_call *call,
 	}
 	return 0;
 }
-EXPORT_SYMBOL_GPL(trace_event_reg);
+EXPORT_SYMBOL(trace_event_reg);  /* code002: 放开给 ZFS 模块 */
 
 void trace_event_enable_cmd_record(bool enable)
 {

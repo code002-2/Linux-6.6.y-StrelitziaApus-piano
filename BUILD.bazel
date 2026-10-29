@@ -152,6 +152,8 @@ filegroup(
 )
 
 _CODE002_MODULE_OUTS = [
+    "fs/zfs/spl.ko",
+    "fs/zfs/zfs.ko",
 ]
 
 define_common_kernels(target_configs = {

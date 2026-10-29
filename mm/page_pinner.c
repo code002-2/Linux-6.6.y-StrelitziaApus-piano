@@ -56,7 +56,7 @@ static struct page_pinner_buffer pp_buffer;
 
 static bool page_pinner_enabled;
 DEFINE_STATIC_KEY_FALSE(page_pinner_inited);
-EXPORT_SYMBOL_GPL(page_pinner_inited);
+EXPORT_SYMBOL(page_pinner_inited);  /* code002: 放开给 ZFS 模块 */
 
 DEFINE_STATIC_KEY_TRUE(failure_tracking);
 
@@ -318,7 +318,7 @@ void __page_pinner_put_page(struct page *page)
 	add_record(&pp_buffer, &record);
 	page_ext_put(page_ext);
 }
-EXPORT_SYMBOL_GPL(__page_pinner_put_page);
+EXPORT_SYMBOL(__page_pinner_put_page);  /* code002: 放开给 ZFS 模块 */
 
 static ssize_t read_buffer(struct file *file, char __user *buf,
 					size_t count, loff_t *ppos)

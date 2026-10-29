@@ -1920,7 +1920,7 @@ void kernel_neon_begin(void)
 	/* Invalidate any task state remaining in the fpsimd regs: */
 	fpsimd_flush_cpu_state();
 }
-EXPORT_SYMBOL_GPL(kernel_neon_begin);
+EXPORT_SYMBOL(kernel_neon_begin);  /* code002: 放开给 ZFS 模块 */
 
 /*
  * kernel_neon_end(): give the CPU FPSIMD registers back to the current task
@@ -1938,7 +1938,7 @@ void kernel_neon_end(void)
 
 	put_cpu_fpsimd_context();
 }
-EXPORT_SYMBOL_GPL(kernel_neon_end);
+EXPORT_SYMBOL(kernel_neon_end);  /* code002: 放开给 ZFS 模块 */
 
 #ifdef CONFIG_EFI
 
