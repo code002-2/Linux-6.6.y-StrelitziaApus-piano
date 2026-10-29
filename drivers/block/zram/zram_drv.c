@@ -2419,6 +2419,8 @@ static void zram_submit_bio(struct bio *bio)
 		WARN_ON_ONCE(1);
 		bio_endio(bio);
 	}
+
+	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 }
 
 static void zram_slot_free_notify(struct block_device *bdev,
@@ -2487,8 +2489,6 @@ static void zram_reset_device(struct zram *zram)
 	memset(&zram->stats, 0, sizeof(zram->stats));
 	atomic_set(&zram->pp_in_progress, 0);
 	reset_bdev(zram);
-
-	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 	up_write(&zram->init_lock);
 }
 
