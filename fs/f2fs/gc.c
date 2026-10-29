@@ -2058,6 +2058,9 @@ retry:
 			goto stop;
 		/* Reset due to checkpoint */
 		sec_freed = 0;
+		/* reset all pinned status during fggc */
+		f2fs_unpin_all_sections(sbi, true);
+
 	}
 go_gc_more:
 	segno = NULL_SEGNO;
