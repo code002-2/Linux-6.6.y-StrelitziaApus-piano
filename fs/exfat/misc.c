@@ -15,6 +15,12 @@
 #include "exfat_raw.h"
 #include "exfat_fs.h"
 
+#ifdef CONFIG_RUST
+/* The checksum arithmetic lives in exfat_rust.rs. */
+extern u32 rust_exfat_calc_chksum32(const void *data, int len, u32 chksum,
+				    bool boot_sector);
+#endif
+
 /*
  * exfat_fs_error reports a file system problem that might indicate fa data
  * corruption/inconsistency. Depending on 'errors' mount option the
@@ -149,6 +155,9 @@ u16 exfat_calc_chksum16(void *data, int len, u16 chksum, int type)
 
 u32 exfat_calc_chksum32(void *data, int len, u32 chksum, int type)
 {
+#ifdef CONFIG_RUST
+	return rust_exfat_calc_chksum32(data, len, chksum, type == CS_BOOT_SECTOR);
+#else
 	int i;
 	u8 *c = (u8 *)data;
 
@@ -159,6 +168,7 @@ u32 exfat_calc_chksum32(void *data, int len, u32 chksum, int type)
 		chksum = ((chksum << 31) | (chksum >> 1)) + *c;
 	}
 	return chksum;
+#endif
 }
 
 void exfat_update_bh(struct buffer_head *bh, int sync)
