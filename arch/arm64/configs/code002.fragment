@@ -153,3 +153,8 @@ CONFIG_RUST_MODVERSIONS=y
 # 6.13 的方式接入 kcfi，C 侧参数保持与 GKI 基线一致。
 # 实测（Kleaf 生产构建）：RUST=y + CFI=y + SCS=y + MODVERSIONS=y 时
 # 门禁 A 442/442、门禁 B 90/96，与关闭 Rust 的基线一致。
+
+# GKI 只导出 KMI 白名单里的符号，Rust 的导出（krs_*）不在名单里，
+# 链接时会被裁掉，导致 Rust 模块在设备上找不到符号。
+# 关掉裁剪让 Rust 导出保留；已有符号的 CRC 不受影响（门禁可验证）。
+# CONFIG_TRIM_UNUSED_KSYMS is not set
