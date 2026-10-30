@@ -998,11 +998,17 @@ endif
 
 ifdef CONFIG_CFI_CLANG
 CC_FLAGS_CFI   := -fsanitize=kcfi
-ifdef CONFIG_RUST
-$(error "Enabling Rust and CFI silently changes the KMI.")
-endif
 KBUILD_CFLAGS  += $(CC_FLAGS_CFI)
 export CC_FLAGS_CFI
+ifdef CONFIG_RUST
+# StrelitziaApus: upstream 6.13 replaced the "Enabling Rust and CFI silently
+# changes the KMI" error with real support. Keep the C side byte-identical to
+# the GKI baseline (plain kcfi, no -fsanitize-cfi-icall-experimental-
+# normalize-integers), because the vendor modules were built against it, and
+# give Rust the same sanitizer. Integer-argument normalization is deliberately
+# left off for the same reason; it would change the C side hashes.
+KBUILD_RUSTFLAGS += -Zsanitizer=kcfi
+endif
 endif
 
 ifneq ($(CONFIG_FUNCTION_ALIGNMENT),0)
