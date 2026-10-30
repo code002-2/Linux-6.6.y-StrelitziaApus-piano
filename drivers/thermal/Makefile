@@ -20,6 +20,8 @@ CFLAGS_gov_power_allocator.o			:= -I$(src)
 thermal_sys-$(CONFIG_THERMAL_GOV_FAIR_SHARE)	+= gov_fair_share.o
 thermal_sys-$(CONFIG_THERMAL_GOV_BANG_BANG)	+= gov_bang_bang.o
 thermal_sys-$(CONFIG_THERMAL_GOV_STEP_WISE)	+= gov_step_wise.o
+thermal_sys-$(and $(CONFIG_THERMAL_GOV_STEP_WISE),$(CONFIG_RUST))	+= \
+	gov_step_wise_rust.o
 thermal_sys-$(CONFIG_THERMAL_GOV_USER_SPACE)	+= gov_user_space.o
 thermal_sys-$(CONFIG_THERMAL_GOV_POWER_ALLOCATOR)	+= gov_power_allocator.o
 
