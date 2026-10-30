@@ -90,6 +90,22 @@ static char default_governor[CPUFREQ_NAME_LEN];
  */
 static struct cpufreq_driver *cpufreq_driver;
 static DEFINE_PER_CPU(struct cpufreq_policy *, cpufreq_cpu_data);
+
+/*
+ * Qualcomm ships a vendor module (qcom-cpufreq-thermal) that pushes a
+ * frequency ceiling through freq QoS, so writing scaling_max_freq below that
+ * ceiling is silently clamped and the CPU can never reach the frequencies its
+ * OPP table advertises. Setting this to 1 makes the policy ignore the
+ * aggregated QoS maximum and use the hardware maximum instead.
+ *
+ * This removes thermal frequency limiting. Only enable it on a device that has
+ * the cooling to cope, and watch the zone temperatures afterwards.
+ */
+static bool cpufreq_ignore_qos_max;
+module_param_named(ignore_qos_max, cpufreq_ignore_qos_max, bool, 0644);
+MODULE_PARM_DESC(ignore_qos_max,
+		 "Ignore freq QoS maximum and allow the hardware maximum frequency");
+
 static DEFINE_RWLOCK(cpufreq_driver_lock);
 
 static DEFINE_STATIC_KEY_FALSE(cpufreq_freq_invariance);
@@ -2689,6 +2705,9 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 	 */
 	new_data.min = freq_qos_read_value(&policy->constraints, FREQ_QOS_MIN);
 	new_data.max = freq_qos_read_value(&policy->constraints, FREQ_QOS_MAX);
+
+	if (unlikely(cpufreq_ignore_qos_max))
+		new_data.max = policy->cpuinfo.max_freq;
 
 	new_data.min = min(new_data.min, get_cpumask_min_limit(policy->related_cpus));
 
