@@ -148,14 +148,8 @@ CONFIG_RUST=y
 CONFIG_RUST_MODVERSIONS=y
 
 
-# Rust 需要关闭影子调用栈：config RUST 有 "depends on !SHADOW_CALL_STACK"，
-# 而上游要到 rustc >= 1.80（-Zfixed-x18）/ 1.82（-Zsanitizer=shadow-call-stack）
-# 才支持在 SCS 内核里安全地跑 Rust 代码。我们手上的 Android 预编译工具链是
-# 1.73，两个 flag 都不认，强行开 SCS 会让 Rust 代码破坏 x18。
-# 代价：这台内核失去 SCS 加固，仅作 Rust 实验构建使用。
-# （1.82 起 Rust 支持 SCS，恢复默认开启）
-
-# Rust 与 CFI_CLANG 在内核顶层 Makefile 里被硬性互斥
-# （"Enabling Rust and CFI silently changes the KMI."）。实验构建先关 CFI，
-# 随后用门禁 A/B 验证 CRC 是否被影响。
-# CONFIG_CFI_CLANG is not set
+# 工具链：rustc 1.80 起支持 -Zfixed-x18，因此可以在保持 SCS 开启的内核里
+# 跑 Rust 代码；alloc 改从 rust-src 编译（见 rust/Makefile）。CFI 按上游
+# 6.13 的方式接入 kcfi，C 侧参数保持与 GKI 基线一致。
+# 实测（Kleaf 生产构建）：RUST=y + CFI=y + SCS=y + MODVERSIONS=y 时
+# 门禁 A 442/442、门禁 B 90/96，与关闭 Rust 的基线一致。
