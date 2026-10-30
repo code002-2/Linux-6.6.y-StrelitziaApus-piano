@@ -359,6 +359,32 @@ quiet_cmd_exports = EXPORTS $@
 	$(NM) -p --defined-only $< \
 		| awk '/ (T|R|D|B) / {printf "EXPORT_SYMBOL_RUST_GPL(%s);\n",$$3}' > $@
 
+# MODVERSIONS stores imported symbol names in a fixed 56-byte field, and Rust
+# v0 mangled names are longer than that for most `kernel` crate items. Rename
+# every export that does not fit to a short alias, in this object and in the
+# objects of the modules that reference it (see scripts/Makefile.build), so
+# that both sides agree on a name that fits.
+rust_short_alias_limit := 56
+
+quiet_cmd_exports_kernel = EXPORTS $@
+      cmd_exports_kernel = \
+	$(NM) -p --defined-only $(obj)/kernel.o \
+		| awk '/ (T|R|D|B) / {print $$3}' > $(obj)/.kernel-syms; \
+	awk -v lim=$(rust_short_alias_limit) \
+		'length($$0) >= lim { printf "%s krs_%d\n", $$0, n++ }' \
+		$(obj)/.kernel-syms > $(obj)/rust-sym-short.map.new; \
+	if [ -s $(obj)/rust-sym-short.map.new ] || [ ! -f $(obj)/rust-sym-short.map ]; then \
+		mv -f $(obj)/rust-sym-short.map.new $(obj)/rust-sym-short.map; \
+	fi; \
+	args=$$(awk '{ printf "--redefine-sym %s=%s ", $$1, $$2 }' \
+		$(obj)/rust-sym-short.map); \
+	if [ -n "$$args" ]; then $(OBJCOPY) $$args $(obj)/kernel.o; fi; \
+	awk -v lim=$(rust_short_alias_limit) \
+		'{ if (length($$1) >= lim) \
+			printf "EXPORT_SYMBOL_RUST_GPL(krs_%d);\n", n++; \
+		 else printf "EXPORT_SYMBOL_RUST_GPL(%s);\n", $$1 }' \
+		$(obj)/.kernel-syms > $@
+
 $(obj)/exports_core_generated.h: $(obj)/core.o FORCE
 	$(call if_changed,exports)
 
@@ -369,7 +395,7 @@ $(obj)/exports_bindings_generated.h: $(obj)/bindings.o FORCE
 	$(call if_changed,exports)
 
 $(obj)/exports_kernel_generated.h: $(obj)/kernel.o FORCE
-	$(call if_changed,exports)
+	$(call if_changed,exports_kernel)
 
 quiet_cmd_rustc_procmacro = $(RUSTC_OR_CLIPPY_QUIET) P $@
       cmd_rustc_procmacro = \
