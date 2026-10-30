@@ -141,7 +141,11 @@ static inline void __chk_io_ptr(const volatile void __iomem *ptr) { }
  *
  * clang: https://clang.llvm.org/docs/AttributeReference.html#preserve-most
  */
-#if __has_attribute(__preserve_most__) && (defined(CONFIG_X86_64) || defined(CONFIG_ARM64))
+/* StrelitziaApus: bindgen's libclang cannot represent the preserve_most
+ * calling convention (it maps to an ABI value it does not know) and panics
+ * on __list_add_valid_or_report(). Fall back to the plain definition when
+ * generating bindings; the attribute only affects code generation. */
+#if __has_attribute(__preserve_most__) && (defined(CONFIG_X86_64) || defined(CONFIG_ARM64)) && !defined(__BINDGEN__)
 # define __preserve_most notrace __attribute__((__preserve_most__))
 #else
 # define __preserve_most
