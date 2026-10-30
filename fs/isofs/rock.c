@@ -13,6 +13,24 @@
 #include "isofs.h"
 #include "rock.h"
 
+#ifdef CONFIG_RUST
+/* The bounds arithmetic on values taken from the medium lives in
+ * rock_rust.rs; reading and buffer handling stay here. */
+struct rust_rock_overflow {
+	int error;
+	int needed;
+};
+extern struct rust_rock_overflow rust_rock_check_overflow(u32 sig, int remaining);
+extern int rust_rock_check_ce(int cont_offset, int cont_size, int blocksize,
+			      int cont_extent, u64 nzones);
+struct rust_rock_setup {
+	int chr_offset;
+	int len;
+};
+extern struct rust_rock_setup rust_rock_setup(u8 de_len, u8 name_len, int rock_offset);
+#define RR_MIN_DE_SIZE 4
+#endif
+
 /*
  * These functions are designed to read the system areas of a directory record
  * and extract relevant information.  There are different functions provided
@@ -53,6 +71,16 @@ static int check_sp(struct rock_ridge *rr, struct inode *inode)
 static void setup_rock_ridge(struct iso_directory_record *de,
 			struct inode *inode, struct rock_state *rs)
 {
+#ifdef CONFIG_RUST
+	{
+		struct rust_rock_setup setup;
+
+		setup = rust_rock_setup(de->length[0], de->name_len[0],
+					ISOFS_SB(inode->i_sb)->s_rock_offset);
+		rs->chr = (unsigned char *)de + setup.chr_offset;
+		rs->len = setup.len;
+	}
+#else
 	rs->len = sizeof(struct iso_directory_record) + de->name_len[0];
 	if (rs->len & 1)
 		(rs->len)++;
@@ -67,6 +95,7 @@ static void setup_rock_ridge(struct iso_directory_record *de,
 		if (rs->len < 0)
 			rs->len = 0;
 	}
+#endif
 }
 
 static void init_rock_state(struct rock_state *rs, struct inode *inode)
@@ -86,11 +115,32 @@ static int rock_continue(struct rock_state *rs)
 {
 	int ret = 1;
 	int blocksize = 1 << rs->inode->i_blkbits;
-	const int min_de_size = offsetof(struct rock_ridge, u);
+	const int min_de_size __maybe_unused = offsetof(struct rock_ridge, u);
 
 	kfree(rs->buffer);
 	rs->buffer = NULL;
 
+#ifdef CONFIG_RUST
+	switch (rust_rock_check_ce(rs->cont_offset, rs->cont_size, blocksize,
+				   rs->cont_extent,
+				   ISOFS_SB(rs->inode->i_sb)->s_nzones)) {
+	case 1:
+		printk(KERN_NOTICE "rock: corrupted directory entry. "
+			"extent=%d, offset=%d, size=%d\n",
+			rs->cont_extent, rs->cont_offset, rs->cont_size);
+		ret = -EIO;
+		goto out;
+	case 2:
+		printk(KERN_NOTICE "rock: corrupted directory entry. "
+			"extent=%u out of volume (nzones=%lu)\n",
+			(unsigned)rs->cont_extent,
+			ISOFS_SB(rs->inode->i_sb)->s_nzones);
+		ret = -EIO;
+		goto out;
+	default:
+		break;
+	}
+#else
 	if ((unsigned)rs->cont_offset > blocksize - min_de_size ||
 	    (unsigned)rs->cont_size > blocksize ||
 	    (unsigned)(rs->cont_offset + rs->cont_size) > blocksize) {
@@ -109,6 +159,7 @@ static int rock_continue(struct rock_state *rs)
 		ret = -EIO;
 		goto out;
 	}
+#endif
 
 	if (rs->cont_extent) {
 		struct buffer_head *bh;
@@ -147,8 +198,23 @@ out:
  */
 static int rock_check_overflow(struct rock_state *rs, int sig)
 {
-	int len;
+	int len __maybe_unused;
 
+#ifdef CONFIG_RUST
+	{
+		struct rust_rock_overflow chk;
+
+		chk = rust_rock_check_overflow((u32)sig, rs->len);
+		if (chk.error) {
+			printk(KERN_NOTICE "rock: directory entry would overflow "
+					"storage\n");
+			printk(KERN_NOTICE "rock: sig=0x%02x, size=%d, remaining=%d\n",
+					sig, chk.needed, rs->len);
+			return chk.error;
+		}
+		return 0;
+	}
+#else
 	switch (sig) {
 	case SIG('S', 'P'):
 		len = sizeof(struct SU_SP_s);
@@ -199,6 +265,7 @@ static int rock_check_overflow(struct rock_state *rs, int sig)
 		return -EIO;
 	}
 	return 0;
+#endif
 }
 
 /*
