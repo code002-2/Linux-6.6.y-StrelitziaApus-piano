@@ -12,6 +12,16 @@
 #include <linux/math64.h>
 #include "governor.h"
 
+#ifdef CONFIG_RUST
+/* The frequency selection policy lives in governor_simpleondemand_rust.rs. */
+extern int rust_simple_ondemand_target(unsigned long busy_time,
+				       unsigned long total_time,
+				       unsigned long current_frequency,
+				       unsigned int upthreshold,
+				       unsigned int downdifferential,
+				       unsigned long *freq);
+#endif
+
 /* Default constants for DevFreq-Simple-Ondemand (DFSO) */
 #define DFSO_UPTHRESHOLD	(90)
 #define DFSO_DOWNDIFFERENCTIAL	(5)
@@ -20,7 +30,9 @@ static int devfreq_simple_ondemand_func(struct devfreq *df,
 {
 	int err;
 	struct devfreq_dev_status *stat;
+#ifndef CONFIG_RUST
 	unsigned long long a, b;
+#endif
 	unsigned int dfso_upthreshold = DFSO_UPTHRESHOLD;
 	unsigned int dfso_downdifferential = DFSO_DOWNDIFFERENCTIAL;
 	struct devfreq_simple_ondemand_data *data = df->data;
@@ -41,6 +53,18 @@ static int devfreq_simple_ondemand_func(struct devfreq *df,
 	    dfso_upthreshold < dfso_downdifferential)
 		return -EINVAL;
 
+#ifdef CONFIG_RUST
+	/* Prevent overflow */
+	if (stat->busy_time >= (1 << 24) || stat->total_time >= (1 << 24)) {
+		stat->busy_time >>= 7;
+		stat->total_time >>= 7;
+	}
+
+	return rust_simple_ondemand_target(stat->busy_time, stat->total_time,
+					   stat->current_frequency,
+					   dfso_upthreshold,
+					   dfso_downdifferential, freq);
+#else
 	/* Assume MAX if it is going to be divided by zero */
 	if (stat->total_time == 0) {
 		*freq = DEVFREQ_MAX_FREQ;
@@ -52,7 +76,9 @@ static int devfreq_simple_ondemand_func(struct devfreq *df,
 		stat->busy_time >>= 7;
 		stat->total_time >>= 7;
 	}
+#endif
 
+#ifndef CONFIG_RUST
 	/* Set MAX if it's busy enough */
 	if (stat->busy_time * 100 >
 	    stat->total_time * dfso_upthreshold) {
@@ -82,6 +108,7 @@ static int devfreq_simple_ondemand_func(struct devfreq *df,
 	*freq = (unsigned long) b;
 
 	return 0;
+#endif
 }
 
 static int devfreq_simple_ondemand_handler(struct devfreq *devfreq,
