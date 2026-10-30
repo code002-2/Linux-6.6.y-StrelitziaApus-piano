@@ -239,7 +239,7 @@ pub(crate) fn module(ts: TokenStream) -> TokenStream {
                     #[doc(hidden)]
                     #[no_mangle]
                     #[link_section = \".init.text\"]
-                    pub unsafe extern \"C\" fn init_module() -> core::ffi::c_int {{
+                    pub unsafe extern \"C\" fn __rust_module_init() -> core::ffi::c_int {{
                         // SAFETY: This function is inaccessible to the outside due to the double
                         // module wrapping it. It is called exactly once by the C side via its
                         // unique name.
@@ -250,7 +250,7 @@ pub(crate) fn module(ts: TokenStream) -> TokenStream {
                     #[doc(hidden)]
                     #[no_mangle]
                     #[link_section = \".exit.text\"]
-                    pub extern \"C\" fn cleanup_module() {{
+                    pub extern \"C\" fn __rust_module_exit() {{
                         // SAFETY:
                         // - This function is inaccessible to the outside due to the double
                         //   module wrapping it. It is called exactly once by the C side via its

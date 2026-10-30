@@ -1001,12 +1001,14 @@ CC_FLAGS_CFI   := -fsanitize=kcfi
 KBUILD_CFLAGS  += $(CC_FLAGS_CFI)
 export CC_FLAGS_CFI
 ifdef CONFIG_RUST
-# StrelitziaApus: upstream 6.13 replaced the "Enabling Rust and CFI silently
-# changes the KMI" error with real support. Keep the C side byte-identical to
-# the GKI baseline (plain kcfi, no -fsanitize-cfi-icall-experimental-
-# normalize-integers), because the vendor modules were built against it, and
-# give Rust the same sanitizer. Integer-argument normalization is deliberately
-# left off for the same reason; it would change the C side hashes.
+# StrelitziaApus: rustc and clang hash CFI types differently. Measured on this
+# toolchain, int (*)(void) is a6c5b136 for clang and 607320d2 for rustc, so a
+# Rust module traps on its very first indirect call, the module init.
+# -fsanitize-cfi-icall-experimental-normalize-integers on both sides makes the
+# hashes agree (3530bb6f), but it changes every C side hash as well, and the
+# vendor modules were built against the unnormalized GKI. A kernel built that
+# way bootlooped on the device, so the C side stays byte-identical to GKI and
+# Rust only gets what clang itself uses.
 KBUILD_RUSTFLAGS += -Zsanitizer=kcfi
 endif
 endif
