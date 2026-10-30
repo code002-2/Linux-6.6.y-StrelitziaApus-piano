@@ -2014,7 +2014,7 @@ config RUST
 	bool "Rust support"
 	depends on HAVE_RUST
 	depends on RUST_IS_AVAILABLE
-	depends on !MODVERSIONS
+	depends on !MODVERSIONS || RUST_MODVERSIONS
 	depends on !GCC_PLUGINS
 	depends on !RANDSTRUCT
 	depends on !SHADOW_CALL_STACK
@@ -2032,6 +2032,24 @@ config RUST
 	  See Documentation/rust/ for more information.
 
 	  If unsure, say N.
+
+config RUST_MODVERSIONS
+	bool "Allow Rust together with MODVERSIONS (experimental)"
+	depends on MODVERSIONS
+	help
+	  Normally Rust cannot be enabled together with MODVERSIONS, because
+	  genksyms computes symbol CRCs from preprocessed C source and cannot
+	  handle Rust code.  With this option the guard is lifted so the
+	  combination can be evaluated.
+
+	  Symbols exported from Rust code do not get a genksyms CRC in this
+	  configuration.  Importing modules are unaffected, since modpost
+	  derives their __versions entries from the ELF symbol table, which is
+	  language independent.  Only Rust code that exports symbols consumed
+	  by other modules is affected.
+
+	  This is a research switch.  Say N unless you know what you are
+	  doing.
 
 config RUSTC_VERSION_TEXT
 	string
