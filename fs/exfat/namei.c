@@ -12,6 +12,12 @@
 #include "exfat_raw.h"
 #include "exfat_fs.h"
 
+#ifdef CONFIG_RUST
+/* Trailing dot trimming lives in exfat_rust.rs. */
+extern unsigned int rust_exfat_striptail_len(unsigned int len, const u8 *name,
+					     bool keep_last_dots);
+#endif
+
 static inline unsigned long exfat_d_version(struct dentry *dentry)
 {
 	return (unsigned long) dentry->d_fsdata;
@@ -69,11 +75,15 @@ static int exfat_d_revalidate(struct dentry *dentry, unsigned int flags)
 static unsigned int exfat_striptail_len(unsigned int len, const char *name,
 					bool keep_last_dots)
 {
+#ifdef CONFIG_RUST
+	return rust_exfat_striptail_len(len, (const u8 *)name, keep_last_dots);
+#else
 	if (!keep_last_dots) {
 		while (len && name[len - 1] == '.')
 			len--;
 	}
 	return len;
+#endif
 }
 
 /*

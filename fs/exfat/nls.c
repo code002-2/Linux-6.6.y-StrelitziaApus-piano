@@ -11,6 +11,21 @@
 #include "exfat_raw.h"
 #include "exfat_fs.h"
 
+#ifdef CONFIG_RUST
+/* The upcase table decoder lives in exfat_rust.rs. */
+struct rust_upcase_state {
+	unsigned int index;
+	bool skip;
+	unsigned int consumed;
+};
+extern struct rust_upcase_state rust_exfat_upcase_feed(const void *src,
+						       unsigned int byte_len,
+						       unsigned short *table,
+						       unsigned int table_len,
+						       unsigned int index,
+						       bool skip);
+#endif
+
 /* Upcase table macro */
 #define EXFAT_NUM_UPCASE	(2918)
 #define UTBL_COUNT		(0x10000)
@@ -675,6 +690,18 @@ static int exfat_load_upcase_table(struct super_block *sb,
 			return -EIO;
 		}
 		sector++;
+#ifdef CONFIG_RUST
+		{
+			struct rust_upcase_state st;
+
+			st = rust_exfat_upcase_feed(bh->b_data, sect_size,
+						    sbi->vol_utbl, UTBL_COUNT,
+						    index, skip);
+			index = st.index;
+			skip = st.skip;
+			i = st.consumed;
+		}
+#else
 		for (i = 0; i < sect_size && index <= 0xFFFF; i += 2) {
 			unsigned short uni = get_unaligned_le16(bh->b_data + i);
 
@@ -690,6 +717,7 @@ static int exfat_load_upcase_table(struct super_block *sb,
 				index++;
 			}
 		}
+#endif
 		chksum = exfat_calc_chksum32(bh->b_data, i, chksum, CS_DEFAULT);
 		brelse(bh);
 	}
