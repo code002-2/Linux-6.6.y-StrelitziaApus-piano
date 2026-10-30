@@ -139,3 +139,10 @@ CONFIG_SECURITY_APPARMOR=y
 
 # ===== OpenZFS（built-in，kernel 侧；用户态工具另装）=====
 CONFIG_ZFS=m
+
+# ===== Rust 支持（实验）=====
+# 6.6 的 Kconfig 默认禁止 RUST 与 MODVERSIONS 共存；RUST_MODVERSIONS 是本地
+# 加的开关，见 init/Kconfig。Rust 导出符号经由 rust/exports.c 的 C 中转层，
+# genksyms 能为其算出 CRC（按 extern int 的原型），因此自洽但不反映真实 ABI。
+CONFIG_RUST=y
+CONFIG_RUST_MODVERSIONS=y
