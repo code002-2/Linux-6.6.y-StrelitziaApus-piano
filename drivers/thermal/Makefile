@@ -26,6 +26,8 @@ thermal_sys-$(and $(CONFIG_THERMAL_GOV_STEP_WISE),$(CONFIG_RUST))	+= \
 	gov_step_wise_rust.o
 thermal_sys-$(CONFIG_THERMAL_GOV_USER_SPACE)	+= gov_user_space.o
 thermal_sys-$(CONFIG_THERMAL_GOV_POWER_ALLOCATOR)	+= gov_power_allocator.o
+thermal_sys-$(and $(CONFIG_THERMAL_GOV_POWER_ALLOCATOR),$(CONFIG_RUST))	+= \
+	gov_power_allocator_rust.o
 
 # cpufreq cooling
 thermal_sys-$(CONFIG_CPU_FREQ_THERMAL)	+= cpufreq_cooling.o

@@ -16,6 +16,30 @@
 
 #include "thermal_core.h"
 
+#ifdef CONFIG_RUST
+/* The PID controller and the budget distribution live in
+ * gov_power_allocator_rust.rs. */
+struct rust_ipa_pid_result {
+	u32 power_range;
+	s64 err_integral;
+	s32 prev_err;
+	s32 err;
+	s64 p;
+	s64 i;
+	s64 d;
+};
+
+extern struct rust_ipa_pid_result rust_ipa_pid(int control_temp, int temperature,
+					       int k_po, int k_pu, int k_i, int k_d,
+					       int integral_cutoff, s64 err_integral,
+					       int prev_err, u32 max_allocatable_power,
+					       u32 sustainable_power, u32 passive_delay_ms);
+
+extern void rust_ipa_divvy_power(const u32 *req_power, const u32 *max_power,
+				 int num_actors, u32 total_req_power, u32 power_range,
+				 u32 *granted_power, u32 *extra_actor_power);
+#endif
+
 #define INVALID_TRIP -1
 
 #define FRAC_BITS 10
@@ -218,14 +242,37 @@ static u32 pid_controller(struct thermal_zone_device *tz,
 			  int control_temp,
 			  u32 max_allocatable_power)
 {
-	s64 p, i, d, power_range;
-	s32 err, max_power_frac;
 	u32 sustainable_power;
 	struct power_allocator_params *params = tz->governor_data;
 
-	max_power_frac = int_to_frac(max_allocatable_power);
-
 	sustainable_power = get_sustainable_power(tz, params, control_temp);
+
+#ifdef CONFIG_RUST
+	{
+		struct rust_ipa_pid_result res;
+
+		res = rust_ipa_pid(control_temp, tz->temperature, tz->tzp->k_po,
+				   tz->tzp->k_pu, tz->tzp->k_i, tz->tzp->k_d,
+				   tz->tzp->integral_cutoff, params->err_integral,
+				   params->prev_err, max_allocatable_power,
+				   sustainable_power,
+				   jiffies_to_msecs(tz->passive_delay_jiffies));
+
+		params->err_integral = res.err_integral;
+		params->prev_err = res.prev_err;
+
+		trace_thermal_power_allocator_pid(tz, frac_to_int(res.err),
+						  frac_to_int(params->err_integral),
+						  frac_to_int(res.p), frac_to_int(res.i),
+						  frac_to_int(res.d), res.power_range);
+
+		return res.power_range;
+	}
+#else
+	s64 p, i, d, power_range;
+	s32 err, max_power_frac;
+
+	max_power_frac = int_to_frac(max_allocatable_power);
 
 	err = control_temp - tz->temperature;
 	err = int_to_frac(err);
@@ -274,6 +321,7 @@ static u32 pid_controller(struct thermal_zone_device *tz,
 					  frac_to_int(d), power_range);
 
 	return power_range;
+#endif
 }
 
 /**
@@ -338,6 +386,10 @@ static void divvy_up_power(u32 *req_power, u32 *max_power, int num_actors,
 			   u32 total_req_power, u32 power_range,
 			   u32 *granted_power, u32 *extra_actor_power)
 {
+#ifdef CONFIG_RUST
+	rust_ipa_divvy_power(req_power, max_power, num_actors, total_req_power,
+			     power_range, granted_power, extra_actor_power);
+#else
 	u32 extra_power, capped_extra_power;
 	int i;
 
@@ -383,6 +435,7 @@ static void divvy_up_power(u32 *req_power, u32 *max_power, int num_actors,
 			granted_power[i] += DIV_ROUND_CLOSEST_ULL(extra_range,
 							 capped_extra_power);
 		}
+#endif
 }
 
 static int allocate_power(struct thermal_zone_device *tz,
