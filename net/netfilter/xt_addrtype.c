@@ -23,6 +23,18 @@
 #include <linux/netfilter/xt_addrtype.h>
 #include <linux/netfilter/x_tables.h>
 
+#ifdef CONFIG_RUST
+/* The decision logic lives in xt_addrtype_rust.rs; the address classification
+ * and the IPv6 route lookups stay here, where the networking stack is. */
+extern bool rust_addrtype_type_hit(u32 addr_type, u16 mask);
+extern int rust_addrtype_v6_bits(u32 addr_type, u16 mask);
+extern bool rust_addrtype_v6_lookup_hit(u32 lookup, u16 mask);
+extern bool rust_addrtype_combine(u16 source, u16 dest, bool invert_source,
+				  bool invert_dest, bool src_hit, bool dst_hit);
+extern int rust_addrtype_checkentry(u32 flags, u32 hook_mask, u32 family,
+				    u16 source, u16 dest, bool ipv6_enabled);
+#endif
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Patrick McHardy <kaber@trash.net>");
 MODULE_DESCRIPTION("Xtables: address type match");
@@ -68,6 +80,16 @@ static u32 match_lookup_rt6(struct net *net, const struct net_device *dev,
 static bool match_type6(struct net *net, const struct net_device *dev,
 				const struct in6_addr *addr, u16 mask)
 {
+#ifdef CONFIG_RUST
+	int addr_type = ipv6_addr_type(addr);
+	int bits = rust_addrtype_v6_bits(addr_type, mask);
+
+	if (bits >= 0)
+		return bits != 0;
+
+	return rust_addrtype_v6_lookup_hit(match_lookup_rt6(net, dev, addr, mask),
+					   mask);
+#else
 	int addr_type = ipv6_addr_type(addr);
 
 	if ((mask & XT_ADDRTYPE_MULTICAST) &&
@@ -82,6 +104,7 @@ static bool match_type6(struct net *net, const struct net_device *dev,
 	     XT_ADDRTYPE_UNREACHABLE) & mask)
 		return !!(mask & match_lookup_rt6(net, dev, addr, mask));
 	return true;
+#endif
 }
 
 static bool
@@ -89,8 +112,21 @@ addrtype_mt6(struct net *net, const struct net_device *dev,
 	const struct sk_buff *skb, const struct xt_addrtype_info_v1 *info)
 {
 	const struct ipv6hdr *iph = ipv6_hdr(skb);
-	bool ret = true;
+	bool ret __maybe_unused = true;
 
+#ifdef CONFIG_RUST
+	{
+		bool src_hit = info->source &&
+			match_type6(net, dev, &iph->saddr, info->source);
+		bool dst_hit = info->dest &&
+			match_type6(net, dev, &iph->daddr, info->dest);
+
+		return rust_addrtype_combine(info->source, info->dest,
+					     info->flags & XT_ADDRTYPE_INVERT_SOURCE,
+					     !!(info->flags & XT_ADDRTYPE_INVERT_DEST),
+					     src_hit, dst_hit);
+	}
+#else
 	if (info->source)
 		ret &= match_type6(net, dev, &iph->saddr, info->source) ^
 		       (info->flags & XT_ADDRTYPE_INVERT_SOURCE);
@@ -98,13 +134,18 @@ addrtype_mt6(struct net *net, const struct net_device *dev,
 		ret &= match_type6(net, dev, &iph->daddr, info->dest) ^
 		       !!(info->flags & XT_ADDRTYPE_INVERT_DEST);
 	return ret;
+#endif
 }
 #endif
 
 static inline bool match_type(struct net *net, const struct net_device *dev,
 			      __be32 addr, u_int16_t mask)
 {
+#ifdef CONFIG_RUST
+	return rust_addrtype_type_hit(inet_dev_addr_type(net, dev, addr), mask);
+#else
 	return !!(mask & (1 << inet_dev_addr_type(net, dev, addr)));
+#endif
 }
 
 static bool
@@ -113,8 +154,20 @@ addrtype_mt_v0(const struct sk_buff *skb, struct xt_action_param *par)
 	struct net *net = xt_net(par);
 	const struct xt_addrtype_info *info = par->matchinfo;
 	const struct iphdr *iph = ip_hdr(skb);
-	bool ret = true;
+	bool ret __maybe_unused = true;
 
+#ifdef CONFIG_RUST
+	{
+		bool src_hit = info->source &&
+			match_type(net, NULL, iph->saddr, info->source);
+		bool dst_hit = info->dest &&
+			match_type(net, NULL, iph->daddr, info->dest);
+
+		return rust_addrtype_combine(info->source, info->dest,
+					     info->invert_source, info->invert_dest,
+					     src_hit, dst_hit);
+	}
+#else
 	if (info->source)
 		ret &= match_type(net, NULL, iph->saddr, info->source) ^
 		       info->invert_source;
@@ -123,6 +176,7 @@ addrtype_mt_v0(const struct sk_buff *skb, struct xt_action_param *par)
 		       info->invert_dest;
 
 	return ret;
+#endif
 }
 
 static bool
@@ -132,7 +186,7 @@ addrtype_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
 	const struct xt_addrtype_info_v1 *info = par->matchinfo;
 	const struct iphdr *iph;
 	const struct net_device *dev = NULL;
-	bool ret = true;
+	bool ret __maybe_unused = true;
 
 	if (info->flags & XT_ADDRTYPE_LIMIT_IFACE_IN)
 		dev = xt_in(par);
@@ -144,6 +198,20 @@ addrtype_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
 		return addrtype_mt6(net, dev, skb, info);
 #endif
 	iph = ip_hdr(skb);
+
+#ifdef CONFIG_RUST
+	{
+		bool src_hit = info->source &&
+			match_type(net, dev, iph->saddr, info->source);
+		bool dst_hit = info->dest &&
+			match_type(net, dev, iph->daddr, info->dest);
+
+		return rust_addrtype_combine(info->source, info->dest,
+					     info->flags & XT_ADDRTYPE_INVERT_SOURCE,
+					     !!(info->flags & XT_ADDRTYPE_INVERT_DEST),
+					     src_hit, dst_hit);
+	}
+#else
 	if (info->source)
 		ret &= match_type(net, dev, iph->saddr, info->source) ^
 		       (info->flags & XT_ADDRTYPE_INVERT_SOURCE);
@@ -151,13 +219,37 @@ addrtype_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
 		ret &= match_type(net, dev, iph->daddr, info->dest) ^
 		       !!(info->flags & XT_ADDRTYPE_INVERT_DEST);
 	return ret;
+#endif
 }
 
 static int addrtype_mt_checkentry_v1(const struct xt_mtchk_param *par)
 {
-	const char *errmsg = "both incoming and outgoing interface limitation cannot be selected";
+	const char *errmsg __maybe_unused = "both incoming and outgoing interface limitation cannot be selected";
 	struct xt_addrtype_info_v1 *info = par->matchinfo;
 
+#ifdef CONFIG_RUST
+	{
+		static const char *const msgs[] = {
+			NULL,
+			"both incoming and outgoing interface limitation cannot be selected",
+			"output interface limitation not valid in PREROUTING and INPUT",
+			"input interface limitation not valid in POSTROUTING and OUTPUT",
+			"ipv6 BLACKHOLE matching not supported",
+			"ipv6 PROHIBIT (THROW, NAT ..) matching not supported",
+			"ipv6 does not support BROADCAST matching",
+		};
+		int err = rust_addrtype_checkentry(info->flags, par->hook_mask,
+						   par->family, info->source,
+						   info->dest,
+						   IS_ENABLED(CONFIG_IP6_NF_IPTABLES));
+
+		if (err) {
+			pr_info_ratelimited("%s\n", msgs[err]);
+			return -EINVAL;
+		}
+		return 0;
+	}
+#else
 	if (info->flags & XT_ADDRTYPE_LIMIT_IFACE_IN &&
 	    info->flags & XT_ADDRTYPE_LIMIT_IFACE_OUT)
 		goto err;
@@ -196,6 +288,7 @@ static int addrtype_mt_checkentry_v1(const struct xt_mtchk_param *par)
 err:
 	pr_info_ratelimited("%s\n", errmsg);
 	return -EINVAL;
+#endif
 }
 
 static struct xt_match addrtype_mt_reg[] __read_mostly = {

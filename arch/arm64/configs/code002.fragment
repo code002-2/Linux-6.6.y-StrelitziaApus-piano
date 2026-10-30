@@ -158,3 +158,6 @@ CONFIG_RUST_MODVERSIONS=y
 # 链接时会被裁掉，导致 Rust 模块在设备上找不到符号。
 # 关掉裁剪让 Rust 导出保留；已有符号的 CRC 不受影响（门禁可验证）。
 # CONFIG_TRIM_UNUSED_KSYMS is not set
+
+# cgroup 匹配器原本没有启用，启用后才能够编译并验证 Rust 版本
+CONFIG_NETFILTER_XT_MATCH_CGROUP=y
