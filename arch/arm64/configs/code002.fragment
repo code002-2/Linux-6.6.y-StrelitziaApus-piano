@@ -146,3 +146,16 @@ CONFIG_ZFS=m
 # genksyms 能为其算出 CRC（按 extern int 的原型），因此自洽但不反映真实 ABI。
 CONFIG_RUST=y
 CONFIG_RUST_MODVERSIONS=y
+
+
+# Rust 需要关闭影子调用栈：config RUST 有 "depends on !SHADOW_CALL_STACK"，
+# 而上游要到 rustc >= 1.80（-Zfixed-x18）/ 1.82（-Zsanitizer=shadow-call-stack）
+# 才支持在 SCS 内核里安全地跑 Rust 代码。我们手上的 Android 预编译工具链是
+# 1.73，两个 flag 都不认，强行开 SCS 会让 Rust 代码破坏 x18。
+# 代价：这台内核失去 SCS 加固，仅作 Rust 实验构建使用。
+# CONFIG_SHADOW_CALL_STACK is not set
+
+# Rust 与 CFI_CLANG 在内核顶层 Makefile 里被硬性互斥
+# （"Enabling Rust and CFI silently changes the KMI."）。实验构建先关 CFI，
+# 随后用门禁 A/B 验证 CRC 是否被影响。
+# CONFIG_CFI_CLANG is not set
