@@ -13,7 +13,11 @@
 #![cfg_attr(test, allow(deref_nullptr))]
 #![cfg_attr(test, allow(unaligned_references))]
 #![cfg_attr(test, allow(unsafe_op_in_unsafe_fn))]
+// StrelitziaApus: bindgen emits opaque placeholders (struct x { _unused:
+// [u8; 0] }) that nothing constructs; rustc 1.80 only warns about them
+// under dead_code, which -D warnings turns into an error.
 #![allow(
+    dead_code,
     clippy::all,
     missing_docs,
     non_camel_case_types,

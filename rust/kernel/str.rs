@@ -558,7 +558,10 @@ impl CString {
         let size = f.bytes_written();
 
         // Allocate a vector with the required number of bytes, and write to it.
-        let mut buf = Vec::try_with_capacity(size)?;
+        // StrelitziaApus: the vendored alloc provided try_with_capacity();
+        // with the toolchain's alloc use the stable equivalent.
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(size).map_err(|_| AllocError)?;
         // SAFETY: The buffer stored in `buf` is at least of size `size` and is valid for writes.
         let mut f = unsafe { Formatter::from_buffer(buf.as_mut_ptr(), size) };
         f.write_fmt(args)?;
@@ -599,8 +602,9 @@ impl<'a> TryFrom<&'a CStr> for CString {
     fn try_from(cstr: &'a CStr) -> Result<CString, AllocError> {
         let mut buf = Vec::new();
 
-        buf.try_extend_from_slice(cstr.as_bytes_with_nul())
-            .map_err(|_| AllocError)?;
+        let bytes = cstr.as_bytes_with_nul();
+        buf.try_reserve(bytes.len()).map_err(|_| AllocError)?;
+        buf.extend_from_slice(bytes);
 
         // INVARIANT: The `CStr` and `CString` types have the same invariants for
         // the string data, and we copied it over without changes.
