@@ -86,3 +86,17 @@ static ALLOCATOR: KernelAllocator = KernelAllocator;
 // See <https://github.com/rust-lang/rust/pull/86844>.
 #[no_mangle]
 static __rust_no_alloc_shim_is_unstable: u8 = 0;
+
+// StrelitziaApus: `alloc` compiled from the toolchain's rust-src has the global
+// OOM handling enabled, so it references these two symbols. Kernel code only
+// uses the fallible allocation APIs, so reaching them is a bug, not an OOM
+// path. `#[alloc_error_handler]` alone does not emit them here, hence the
+// explicit definitions.
+#[no_mangle]
+static __rust_alloc_error_handler_should_panic: u8 = 0;
+
+#[no_mangle]
+unsafe extern "C" fn __rust_alloc_error_handler(size: usize, align: usize) -> ! {
+    crate::pr_err!("allocation failure (size {}, align {})\n", size, align);
+    panic!("allocation failure")
+}

@@ -2017,7 +2017,10 @@ config RUST
 	depends on !MODVERSIONS || RUST_MODVERSIONS
 	depends on !GCC_PLUGINS
 	depends on !RANDSTRUCT
-	depends on !SHADOW_CALL_STACK
+	# StrelitziaApus: upstream 6.11 dropped this dependency once Rust could
+	# be built for a shadow-call-stack kernel. The rustc capability gate in
+	# arch/arm64/Kconfig (RUSTC_SUPPORTS_ARM64) now requires a compiler that
+	# implements -Zfixed-x18 / -Zsanitizer=shadow-call-stack.
 	depends on !DEBUG_INFO_BTF || (PAHOLE_HAS_LANG_EXCLUDE && !LTO)
 	# StrelitziaApus: CONSTRUCTORS adds ctor_fn_t *ctors and
 	# unsigned int num_ctors to struct module, which changes the CRC of

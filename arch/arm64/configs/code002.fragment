@@ -153,7 +153,7 @@ CONFIG_RUST_MODVERSIONS=y
 # 才支持在 SCS 内核里安全地跑 Rust 代码。我们手上的 Android 预编译工具链是
 # 1.73，两个 flag 都不认，强行开 SCS 会让 Rust 代码破坏 x18。
 # 代价：这台内核失去 SCS 加固，仅作 Rust 实验构建使用。
-# CONFIG_SHADOW_CALL_STACK is not set
+# （1.82 起 Rust 支持 SCS，恢复默认开启）
 
 # Rust 与 CFI_CLANG 在内核顶层 Makefile 里被硬性互斥
 # （"Enabling Rust and CFI silently changes the KMI."）。实验构建先关 CFI，
