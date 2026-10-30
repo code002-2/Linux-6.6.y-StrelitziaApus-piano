@@ -17,6 +17,16 @@
 #include <linux/netfilter/xt_cgroup.h>
 #include <net/sock.h>
 
+#ifdef CONFIG_RUST
+/* The rule validation and the verdict live in xt_cgroup_rust.rs; the socket
+ * and cgroup lookups stay here. */
+extern int rust_cgroup_check_v0(u32 invert, bool classid_enabled);
+extern int rust_cgroup_check_v1(u32 invert_path, u32 invert_classid,
+				bool has_path, bool has_classid,
+				bool classid_enabled, bool path_terminated);
+extern bool rust_cgroup_combine(bool hit, bool invert);
+#endif
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniel Borkmann <dborkman@redhat.com>");
 MODULE_DESCRIPTION("Xtables: process control group matching");
@@ -29,6 +39,18 @@ static int cgroup_mt_check_v0(const struct xt_mtchk_param *par)
 {
 	struct xt_cgroup_info_v0 *info = par->matchinfo;
 
+#ifdef CONFIG_RUST
+	switch (rust_cgroup_check_v0(info->invert,
+				     IS_ENABLED(CONFIG_CGROUP_NET_CLASSID))) {
+	case 0:
+		return 0;
+	case 4:
+		pr_info_ratelimited(NET_CLS_CLASSID_INVALID_MSG);
+		return -EINVAL;
+	default:
+		return -EINVAL;
+	}
+#else
 	if (info->invert & ~1)
 		return -EINVAL;
 
@@ -38,6 +60,7 @@ static int cgroup_mt_check_v0(const struct xt_mtchk_param *par)
 	}
 
 	return 0;
+#endif
 }
 
 static int cgroup_mt_check_v1(const struct xt_mtchk_param *par)
@@ -45,6 +68,37 @@ static int cgroup_mt_check_v1(const struct xt_mtchk_param *par)
 	struct xt_cgroup_info_v1 *info = par->matchinfo;
 	struct cgroup *cgrp;
 
+#ifdef CONFIG_RUST
+	{
+		int err;
+
+		err = rust_cgroup_check_v1(info->invert_path, info->invert_classid,
+					   info->has_path, info->has_classid,
+					   IS_ENABLED(CONFIG_CGROUP_NET_CLASSID),
+					   info->has_path &&
+					   strnlen(info->path, sizeof(info->path)) < sizeof(info->path));
+
+		switch (err) {
+		case 0:
+			break;
+		case 1:
+			return -EINVAL;
+		case 2:
+			pr_info_ratelimited("no path or classid specified\n");
+			return -EINVAL;
+		case 3:
+			pr_info_ratelimited("path and classid specified\n");
+			return -EINVAL;
+		case 4:
+			pr_info_ratelimited(NET_CLS_CLASSID_INVALID_MSG);
+			return -EINVAL;
+		case 5:
+			return -ENAMETOOLONG;
+		default:
+			return -EINVAL;
+		}
+	}
+#else
 	if ((info->invert_path & ~1) || (info->invert_classid & ~1))
 		return -EINVAL;
 
@@ -67,6 +121,10 @@ static int cgroup_mt_check_v1(const struct xt_mtchk_param *par)
 	if (info->has_path) {
 		if (strnlen(info->path, sizeof(info->path)) >= sizeof(info->path))
 			return -ENAMETOOLONG;
+#endif
+
+	info->priv = NULL;
+	if (info->has_path) {
 
 		cgrp = cgroup_get_from_path(info->path);
 		if (IS_ERR(cgrp)) {
@@ -85,6 +143,37 @@ static int cgroup_mt_check_v2(const struct xt_mtchk_param *par)
 	struct xt_cgroup_info_v2 *info = par->matchinfo;
 	struct cgroup *cgrp;
 
+#ifdef CONFIG_RUST
+	{
+		int err;
+
+		err = rust_cgroup_check_v1(info->invert_path, info->invert_classid,
+					   info->has_path, info->has_classid,
+					   IS_ENABLED(CONFIG_CGROUP_NET_CLASSID),
+					   info->has_path &&
+					   strnlen(info->path, sizeof(info->path)) < sizeof(info->path));
+
+		switch (err) {
+		case 0:
+			break;
+		case 1:
+			return -EINVAL;
+		case 2:
+			pr_info_ratelimited("no path or classid specified\n");
+			return -EINVAL;
+		case 3:
+			pr_info_ratelimited("path and classid specified\n");
+			return -EINVAL;
+		case 4:
+			pr_info_ratelimited(NET_CLS_CLASSID_INVALID_MSG);
+			return -EINVAL;
+		case 5:
+			return -ENAMETOOLONG;
+		default:
+			return -EINVAL;
+		}
+	}
+#else
 	if ((info->invert_path & ~1) || (info->invert_classid & ~1))
 		return -EINVAL;
 
@@ -107,6 +196,10 @@ static int cgroup_mt_check_v2(const struct xt_mtchk_param *par)
 	if (info->has_path) {
 		if (strnlen(info->path, sizeof(info->path)) >= sizeof(info->path))
 			return -ENAMETOOLONG;
+#endif
+
+	info->priv = NULL;
+	if (info->has_path) {
 
 		cgrp = cgroup_get_from_path(info->path);
 		if (IS_ERR(cgrp)) {
@@ -129,8 +222,13 @@ cgroup_mt_v0(const struct sk_buff *skb, struct xt_action_param *par)
 	if (!sk || !sk_fullsock(sk) || !net_eq(xt_net(par), sock_net(sk)))
 		return false;
 
+#ifdef CONFIG_RUST
+	return rust_cgroup_combine(info->id == sock_cgroup_classid(&skb->sk->sk_cgrp_data),
+				   info->invert);
+#else
 	return (info->id == sock_cgroup_classid(&skb->sk->sk_cgrp_data)) ^
 		info->invert;
+#endif
 }
 
 static bool cgroup_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
@@ -143,12 +241,22 @@ static bool cgroup_mt_v1(const struct sk_buff *skb, struct xt_action_param *par)
 	if (!sk || !sk_fullsock(sk) || !net_eq(xt_net(par), sock_net(sk)))
 		return false;
 
+#ifdef CONFIG_RUST
+	if (ancestor)
+		return rust_cgroup_combine(cgroup_is_descendant(sock_cgroup_ptr(skcd),
+								ancestor),
+					   info->invert_path);
+	else
+		return rust_cgroup_combine(info->classid == sock_cgroup_classid(skcd),
+					   info->invert_classid);
+#else
 	if (ancestor)
 		return cgroup_is_descendant(sock_cgroup_ptr(skcd), ancestor) ^
 			info->invert_path;
 	else
 		return (info->classid == sock_cgroup_classid(skcd)) ^
 			info->invert_classid;
+#endif
 }
 
 static bool cgroup_mt_v2(const struct sk_buff *skb, struct xt_action_param *par)
@@ -161,12 +269,22 @@ static bool cgroup_mt_v2(const struct sk_buff *skb, struct xt_action_param *par)
 	if (!sk || !sk_fullsock(sk) || !net_eq(xt_net(par), sock_net(sk)))
 		return false;
 
+#ifdef CONFIG_RUST
+	if (ancestor)
+		return rust_cgroup_combine(cgroup_is_descendant(sock_cgroup_ptr(skcd),
+								ancestor),
+					   info->invert_path);
+	else
+		return rust_cgroup_combine(info->classid == sock_cgroup_classid(skcd),
+					   info->invert_classid);
+#else
 	if (ancestor)
 		return cgroup_is_descendant(sock_cgroup_ptr(skcd), ancestor) ^
 			info->invert_path;
 	else
 		return (info->classid == sock_cgroup_classid(skcd)) ^
 			info->invert_classid;
+#endif
 }
 
 static void cgroup_mt_destroy_v1(const struct xt_mtdtor_param *par)
