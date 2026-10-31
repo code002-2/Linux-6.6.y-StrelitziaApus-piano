@@ -1,0 +1,5 @@
+config MI_ASYNC_RECLAIM
+    tristate "support MI_ASYNC_RECLAIM module"
+    default n
+    help
+      async reclaim solves the blocking problem caused by rwsem lock contention of reverse mapping during mem recycling.

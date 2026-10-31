@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+/dts-v1/;
+/plugin/;
+
+#include "tuna-wcn7750-bt.dtsi"
+
+/* The yupei stock devicetree gives the wcn7750 no RFA 0p8 supply. */
+&bluetooth {
+	/delete-property/ qcom,bt-vdd-rfa-0p8-supply;
+	/delete-property/ qcom,bt-vdd-rfa-0p8-config;
+};
+
+/* There is no FM radio on yupei, qupv3_se5 carries the keyboard instead. */
+&qupv3_se5_i2c {
+	nq@64 {
+		status = "disabled";
+	};
+};
+
+/ {
+	model = "Qualcomm Technologies, Inc. Tuna MTP";
+	compatible = "qcom,tuna-mtp", "qcom,tunap-mtp", "qcom,mtp",
+		     "qcom,tuna", "qcom,tunap";
+	qcom,msm-id = <681 0x10000>, <655 0x10000>, <694 0x10000>;
+	qcom,board-id = <8 0>;
+	xiaomi,miboard-id = <10 0>;
+};

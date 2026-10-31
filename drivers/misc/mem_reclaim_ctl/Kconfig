@@ -1,0 +1,5 @@
+config MEM_RECLAIM_CTL
+        tristate "memory reclaim control"
+        default n
+        help
+          This driver speed up memory rmap.

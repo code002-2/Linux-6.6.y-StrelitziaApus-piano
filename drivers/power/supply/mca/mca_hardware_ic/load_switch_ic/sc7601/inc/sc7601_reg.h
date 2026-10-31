@@ -1,0 +1,16 @@
+#ifndef _SC7601_REG_H_
+#define _SC7601_REG_H_
+
+#define SC7601_REG_01 0x01
+#define SC7601_REG_02 0x02
+#define SC7601_REG_03 0x03
+#define SC7601_REG_04 0x04
+#define SC7601_REG_06 0x06
+#define SC7601_REG_08 0x08
+#define SC7601_REG_MAX 0x20
+
+#define SC7601_REG04_EN_MASK 0x80
+#define SC7601_LOWPOWER_MASK 0x40
+#define SC7601_LOWPOWER_SHIFT 6
+
+#endif /* _SC7601_REG_H_ */

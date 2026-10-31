@@ -1,0 +1,83 @@
+//mi,mdss-dsi-dimmingon-command = [
+//	15 00 00 00 00 00 02 53 28
+//];
+//mi,mdss-dsi-dimmingon-command-state = "dsi_hs_mode";
+
+//mi,mdss-dsi-dimmingoff-command = [
+//	15 00 00 00 00 00 02 53 20
+//];
+//mi,mdss-dsi-dimmingoff-command-state = "dsi_hs_mode";
+
+qcom,mdss-dsi-off-command = [
+	39 00 00 40 00 00 03 51 00 00
+	05 00 00 00 1E 00 01 28
+	05 00 00 00 78 00 01 10
+];
+qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-hbm-on-command = [
+	39 00 00 00 00 00 03 51 34 BC
+];
+mi,mdss-dsi-hbm-on-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-hbm-off-command = [
+	39 00 00 00 00 00 03 51 15 54
+];
+/* <mipi_address  update_index  update_length> */
+mi,mdss-dsi-hbm-off-command-update = <0x51 0 2>;
+mi,mdss-dsi-hbm-off-command-state = "dsi_hs_mode";
+
+qcom,mdss-dsi-nolp-command = [
+	39 00 00 00 00 00 03 51 00 00
+	/* AOD OFF */
+	05 00 00 00 00 00 01 38
+];
+qcom,mdss-dsi-nolp-command-update = <0x51 0 2>;
+qcom,mdss-dsi-nolp-command-state = "dsi_hs_mode";
+mi,mdss-dsi-doze-hbm-command = [
+	/* AOD ON */
+	39 00 00 40 00 00 01 39
+	39 00 00 40 00 00 02 6D 00
+	39 00 00 00 00 00 03 51 02 61
+];
+mi,mdss-dsi-doze-hbm-command-state = "dsi_hs_mode";
+mi,mdss-dsi-doze-lbm-command = [
+	/* AOD ON */
+	39 00 00 40 00 00 01 39
+	39 00 00 40 00 00 02 6D 02
+	39 00 00 00 00 00 03 51 00 2E
+];
+mi,mdss-dsi-doze-lbm-command-state = "dsi_hs_mode";
+
+/*timming common*/
+qcom,mdss-dsi-panel-width = <1156>;
+qcom,mdss-dsi-panel-height = <2510>;
+qcom,mdss-dsi-h-front-porch = <64>;
+qcom,mdss-dsi-h-back-porch = <64>;
+qcom,mdss-dsi-h-pulse-width = <32>;
+qcom,mdss-dsi-v-back-porch = <64>;
+qcom,mdss-dsi-v-front-porch = <64>;
+qcom,mdss-dsi-v-pulse-width = <32>;
+qcom,mdss-dsi-h-sync-pulse = <0>;
+qcom,mdss-dsi-h-left-border = <0>;
+qcom,mdss-dsi-h-right-border = <0>;
+qcom,mdss-dsi-v-top-border = <0>;
+qcom,mdss-dsi-v-bottom-border = <0>;
+qcom,mdss-dsi-panel-clockrate = <1198000000>;
+qcom,mdss-dsi-panel-jitter = <0x5 0x1>;
+qcom,mdss-mdp-transfer-time-us = <7300>;
+
+qcom,mdss-dsi-panel-phy-timings = [00 27 0A 0A 1B 19 0A 0B 0A 02 04 00 20 0F];
+qcom,display-topology = <2 2 1>;
+qcom,default-topology-index = <0>;
+
+/*dsc common*/
+qcom,compression-mode = "dsc";
+qcom,mdss-dsc-version = <0x12>;
+qcom,mdss-dsc-scr-version = <0x0>;
+qcom,mdss-dsc-slice-height = <10>;
+qcom,mdss-dsc-slice-width = <578>;
+qcom,mdss-dsc-slice-per-pkt = <2>;
+qcom,mdss-dsc-bit-per-component = <10>;
+qcom,mdss-dsc-bit-per-pixel = <8>;
+qcom,mdss-dsc-block-prediction-enable;

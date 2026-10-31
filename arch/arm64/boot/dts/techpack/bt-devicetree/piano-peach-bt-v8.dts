@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
+/dts-v1/;
+/plugin/;
+
+#include "sun-peach-bt-v8.dtsi"
+
+/* Match piano's stock supplies; it has no separate antenna LDO. */
+&bluetooth {
+	/delete-property/ qcom,bt-ant-ldo-supply;
+	/delete-property/ qcom,bt-ant-ldo-config;
+};
+
+/* Piano uses UART for Bluetooth and has no FM radio. */
+&qupv3_se13_q2spi {
+	status = "disabled";
+};
+
+&qupv3_se5_i2c {
+	nq@64 {
+		status = "disabled";
+	};
+};
+
+/ {
+	model = "Qualcomm Technologies, Inc. Piano based on SM8750";
+	compatible = "qcom,sun-mtp", "qcom,sun", "qcom,sunp-mtp", "qcom,sunp",
+		     "qcom,mtp";
+	qcom,msm-id = <618 0x10000>, <618 0x20000>, <639 0x10000>, <639 0x20000>,
+		      <0x100026a 0x10000>, <0x100026a 0x20000>,
+		      <0x100027f 0x10000>, <0x100027f 0x20000>;
+	qcom,board-id = <0x40008 0>;
+	xiaomi,miboard-id = <0x9 0>;
+};

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+KDIR := $(TOP)/kernel_platform/common
+
+
+LINUX_INC +=	-Iinclude/linux \
+		-Iinclude/linux/drm
+
+LINUX_INC +=	-I$(TOUCHFEATURE_ROOT) \
+
+CDEFINES +=	-Wall\
+	-Werror\
+	-D__linux__
+
+KBUILD_CPPFLAGS += $(CDEFINES)
+
+ccflags-y += $(LINUX_INC)
+
+ifeq ($(call cc-option-yn, -Wmaybe-uninitialized),y)
+EXTRA_CFLAGS += -Wmaybe-uninitialized
+endif
+
+#KBUILD_EXTRA_SYMBOLS +=$(OUT)/obj/vendor/qcom/opensource/display-drivers/msm/Module.symvers
+# ported from Android.mk
+$(info within KBUILD file KBUILD_EXTRA_SYMBOLS = $(KBUILD_EXTRA_SYMBOLS))
+
+ifeq ($(call cc-option-yn, -Wheader-guard),y)
+EXTRA_CFLAGS += -Wheader-guard
+endif
+
+
+#LINUXINCLUDE += -I$(MMRM_ROOT)/driver/src
+
+obj-m := nt36532_touch.o
+nt36532_touch-y := nt36xxx.o \
+	nt36xxx_fw_update.o \
+	nt36xxx_ext_proc.o \
+	nt36xxx_mp_ctrlram.o \

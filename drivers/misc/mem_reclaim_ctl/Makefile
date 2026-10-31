@@ -1,0 +1,1 @@
+obj-$(CONFIG_MEM_RECLAIM_CTL)     += mem_reclaim_ctl.o

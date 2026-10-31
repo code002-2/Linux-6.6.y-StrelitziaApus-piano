@@ -1,0 +1,156 @@
+qcom,mdss-dsi-off-command = [
+	05 00 00 00 00 00 01 28
+	05 00 00 00 78 00 01 10
+];
+qcom,mdss-dsi-off-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-hbm-on-command = [
+	39 00 00 00 00 00 03 51 17 FF
+];
+mi,mdss-dsi-hbm-on-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-hbm-off-command = [
+	39 00 00 00 00 00 03 51 0A AB
+];
+mi,mdss-dsi-hbm-off-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-doze-hbm-command = [
+	15 00 00 40 00 00 02 53 20
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 19
+	39 00 00 40 00 00 05 BE 10 0A 00 DC
+	15 00 00 40 00 00 02 6F 04
+	39 00 00 40 00 00 03 51 07 FF
+	15 00 00 40 00 00 02 2F 30
+	15 00 00 40 00 00 02 6F 04
+	15 00 00 40 00 00 02 35 00
+	05 00 00 40 00 00 01 39
+	39 00 00 00 00 00 03 51 00 CF
+];
+mi,mdss-dsi-doze-hbm-command-state = "dsi_lp_mode";
+
+mi,mdss-dsi-doze-lbm-command = [
+	15 00 00 40 00 00 02 53 20
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 19
+	39 00 00 40 00 00 05 BE 10 0A 00 DC
+	15 00 00 40 00 00 02 6F 04
+	39 00 00 40 00 00 03 51 03 FF
+	15 00 00 40 00 00 02 2F 30
+	15 00 00 40 00 00 02 6F 04
+	15 00 00 40 00 00 02 35 00
+	05 00 00 40 00 00 01 39
+	39 00 00 00 00 00 03 51 00 15
+];
+mi,mdss-dsi-doze-lbm-command-state = "dsi_lp_mode";
+
+mi,mdss-dsi-round-corner-on-command = [
+	/*round on */
+	39 00 00 40 00 00 06 F0 55 AA 52 08 07
+	15 00 00 00 00 00 02 C0 07
+];
+mi,mdss-dsi-round-corner-on-command-state = "dsi_lp_mode";
+
+mi,mdss-dsi-round-corner-off-command = [
+	/*round off */
+	39 00 00 40 00 00 06 F0 55 AA 52 08 07
+	15 00 00 00 00 00 02 C0 06
+];
+mi,mdss-dsi-round-corner-off-command-state = "dsi_lp_mode";
+
+mi,mdss-dsi-gamma-by-temper-comp-off-mode-command = [
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 03
+	15 00 00 00 00 00 02 C0 21
+];
+mi,mdss-dsi-gamma-by-temper-comp-off-mode-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-gamma-by-temper-comp-28-32-mode-command = [
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 03
+	15 00 00 00 00 00 02 C0 41
+];
+mi,mdss-dsi-gamma-by-temper-comp-28-32-mode-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-gamma-by-temper-comp-33-38-mode-command = [
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 03
+	15 00 00 00 00 00 02 C0 51
+];
+mi,mdss-dsi-gamma-by-temper-comp-33-38-mode-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-gamma-by-temper-comp-39-42-mode-command = [
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 03
+	15 00 00 00 00 00 02 C0 61
+];
+mi,mdss-dsi-gamma-by-temper-comp-39-42-mode-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-gamma-by-temper-comp-above-42-mode-command = [
+	39 00 00 40 00 00 06 F0 55 AA 52 08 00
+	15 00 00 40 00 00 02 6F 03
+	15 00 00 00 00 00 02 C0 71
+];
+mi,mdss-dsi-gamma-by-temper-comp-above-42-mode-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-dimmingon-command = [15 00 00 00 00 00 02 53 28];
+mi,mdss-dsi-dimmingon-command-state = "dsi_hs_mode";
+mi,mdss-dsi-dimmingoff-command = [15 00 00 00 00 00 02 53 20];
+mi,mdss-dsi-dimmingoff-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-pwm-demura-switch-command = [
+	39 00 00 60 00 00 03 51 00 CE
+	39 00 00 60 00 00 06 F0 55 AA 52 08 04
+	15 00 00 60 00 00 02 6F 01
+	39 00 00 60 00 00 04 B5 00 00 07
+	15 00 00 60 00 00 02 9D AA
+	39 00 00 60 00 00 0F A2 03 02 00 D1 5A 61 22 22 22 22 22 32 22 22
+	05 00 00 20 00 00 01 A9 
+];
+mi,mdss-dsi-pwm-demura-switch-command-update = <0x51 0 2>;
+mi,mdss-dsi-pwm-demura-switch-command-state = "dsi_hs_mode";
+
+mi,mdss-dsi-dc-demura-switch-command = [
+	39 00 00 60 00 00 03 51 00 CF
+	39 00 00 60 00 00 06 F0 55 AA 52 08 04
+	15 00 00 60 00 00 02 6F 01
+	39 00 00 60 00 00 04 B5 00 00 0B
+	15 00 00 60 00 00 02 9D AA
+	39 00 00 60 00 00 0F A2 03 02 00 D1 5A 61 22 22 22 22 22 32 22 22
+	05 00 00 20 00 00 01 A9 
+];
+mi,mdss-dsi-dc-demura-switch-command-update = <0x51 0 2>;
+mi,mdss-dsi-dc-demura-switch-command-state = "dsi_hs_mode";
+/*timming common*/
+qcom,mdss-dsi-panel-width = <1200>;
+qcom,mdss-dsi-panel-height = <2670>;
+qcom,mdss-dsi-h-front-porch = <16>;
+qcom,mdss-dsi-h-back-porch = <32>;
+qcom,mdss-dsi-h-pulse-width = <16>;
+qcom,mdss-dsi-v-back-porch = <37>;
+qcom,mdss-dsi-v-front-porch = <45>;
+qcom,mdss-dsi-v-pulse-width = <8>;
+qcom,mdss-dsi-h-sync-pulse = <0>;
+qcom,mdss-dsi-h-left-border = <0>;
+qcom,mdss-dsi-h-right-border = <0>;
+qcom,mdss-dsi-v-top-border = <0>;
+qcom,mdss-dsi-v-bottom-border = <0>;
+qcom,mdss-dsi-panel-clockrate = <1150000000>;
+qcom,mdss-dsi-panel-jitter = <0x5 0x1>;
+qcom,mdss-mdp-transfer-time-us = <7300>;
+
+qcom,mdss-dsi-panel-phy-timings = [00 26 0A 0A 1B 19 0A 0A 0A 02 04 00 20 0F];
+qcom,display-topology = <2 2 1>;
+qcom,default-topology-index = <0>;
+
+/*dsc common*/
+qcom,compression-mode = "dsc";
+qcom,mdss-dsc-version = <0x12>;
+qcom,mdss-dsc-scr-version = <0x0>;
+qcom,mdss-dsc-slice-height = <30>;
+qcom,mdss-dsc-slice-width = <600>;
+qcom,mdss-dsc-slice-per-pkt = <2>;
+qcom,mdss-dsc-bit-per-component = <10>;
+qcom,mdss-dsc-bit-per-pixel = <8>;
+qcom,mdss-dsc-block-prediction-enable;
+qcom,src-chroma-format = <1>; // add in each timing node to enable 4:2:2 mode
