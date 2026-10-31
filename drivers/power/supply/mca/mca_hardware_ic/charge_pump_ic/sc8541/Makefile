@@ -1,0 +1,1 @@
+obj-$(CONFIG_MCA_EXTERNAL_CP_SC8541)	+= sc8541.o

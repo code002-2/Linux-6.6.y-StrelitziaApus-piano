@@ -1,0 +1,15 @@
+# MIUI ADD: Stability_DebugEnhance
+boottime.ko
+# END Stability_DebugEnhance
+miev.ko
+zram.ko
+zsmalloc.ko
+mi_ubt.ko
+printk_enhance.ko
+kshrink_slabd.ko
+lz4asm.ko
+rt_mod.ko
+cpq.ko
+dma-buf-ref.ko
+mi_rmap_efficiency.ko
+ntsync.ko

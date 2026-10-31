@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# The Qualcomm techpacks are written to be built one by one as external
+# modules, with a makefile in each of them passing paths and options to
+# Kbuild on the command line. Build them as part of the kernel instead:
+# export the same variables from here, scoping the ones that differ
+# between techpacks to the directory that wants them.
+
+techpack := $(srctree)/$(src)
+
+# the in-tree build has no Android tree for the techpacks to resolve against
+export ANDROID_BUILD_TOP :=
+
+export KERNEL_SRC := $(srctree)
+export KERNEL_ROOT := $(srctree)
+
+export AUDIO_ROOT := $(techpack)/audio-kernel
+export BT_ROOT := $(techpack)/bt-kernel
+export CAMERA_KERNEL_ROOT := $(techpack)/camera-kernel
+export DISPLAY_ROOT := $(techpack)/display-drivers/
+export DSP_ROOT := $(techpack)/dsp-kernel
+export EVA_ROOT := $(techpack)/eva-kernel
+export KGSL_PATH := $(techpack)/graphics-kernel/
+export MMRM_ROOT := $(techpack)/mmrm-driver
+export MSM_EXT_DISPLAY_ROOT := $(techpack)/mm-drivers/
+export MSM_HW_FENCE_ROOT := $(techpack)/mm-drivers/
+export RMNET_CORE_INC_DIR := $(techpack)/datarmnet/core
+export RMNET_CORE_ROOT := $(techpack)/datarmnet/core
+export RMNET_SHS_ROOT := $(techpack)/datarmnet-ext/shs
+export SMEM_MAILBOX_ROOT := $(techpack)/data-kernel/drivers/smem-mailbox
+export SPU_ROOT := $(techpack)/spu-kernel
+export SSG_MODULE_ROOT := $(techpack)/securemsm-kernel
+export SYNC_FENCE_ROOT := $(techpack)/mm-drivers/
+export SYNX_ROOT := $(techpack)/synx-kernel
+export TOUCHFEATURE_ROOT := $(techpack)/touch-driver/xiaomi
+ifeq ($(CONFIG_MACH_XIAOMI_PIANO),y)
+touch_variant := p81
+$(obj)/audio-kernel: export CONFIG_TARGET_PRODUCT_PIANO := y
+else
+touch_variant := p82
+$(obj)/audio-kernel: export CONFIG_TARGET_PRODUCT_YUPEI := y
+endif
+export TOUCH_ROOT := $(techpack)/touch-driver/$(touch_variant)
+export VIDEO_ROOT := $(techpack)/video-driver
+export WLAN_PLATFORM_ROOT := $(techpack)/wlan/platform
+export WLAN_ROOT := $(techpack)/wlan/qcacld-3.0
+
+$(obj)/audio-kernel: export MODNAME := audio_dlkm
+
+$(obj)/datarmnet/core: export MODNAME := rmnet_core
+$(obj)/datarmnet-ext/aps: export CONFIG_RMNET_APS := m
+$(obj)/datarmnet-ext/mem: export CONFIG_RMNET_MEM := m
+$(obj)/datarmnet-ext/offload: export CONFIG_RMNET_OFFLOAD := m
+$(obj)/datarmnet-ext/perf: export CONFIG_RMNET_PERF := m
+$(obj)/datarmnet-ext/perf_tether: export CONFIG_RMNET_PERF_TETHER := m
+$(obj)/datarmnet-ext/sch: export CONFIG_RMNET_SCH := m
+$(obj)/datarmnet-ext/shs: export MODNAME := rmnet_shs
+$(obj)/datarmnet-ext/wlan: export CONFIG_RMNET_WLAN := m
+
+$(obj)/touch-driver/$(touch_variant): export CONFIG_DISABLE_POWER_STATUS := 1
+$(obj)/touch-driver/$(touch_variant): export CONFIG_TOUCH_STYLUS_SUPPORT := 1
+$(obj)/touch-driver/$(touch_variant): export CONFIG_TOUCH_TDDI_SUPPORT := 1
+$(obj)/touch-driver/$(touch_variant): export CONFIG_TOUCH_THP_SUPPORT := 1
+
+$(obj)/wlan/platform: export CONFIG_CNSS_OUT_OF_TREE := y
+$(obj)/wlan/qcacld-3.0: export CONFIG_IPA_OUT_OF_TREE := y
+$(obj)/wlan/qcacld-3.0: export CONFIG_QCA_WIFI_2_0 := 1
+$(obj)/wlan/qcacld-3.0: export CONFIG_QCA_WIFI_ISOC := 0
+ifeq ($(CONFIG_MACH_XIAOMI_PIANO),y)
+$(obj)/wlan/qcacld-3.0: export MODNAME := qca_cld3_peach_v2
+$(obj)/wlan/qcacld-3.0: export WLAN_PROFILE := sun_gki_peach-v2
+else
+$(obj)/wlan/qcacld-3.0: export MODNAME := qca_cld3_wcn7750
+$(obj)/wlan/qcacld-3.0: export WLAN_PROFILE := sun_gki_wcn7750
+endif
+$(obj)/wlan/qcacld-3.0: export WLAN_CFG_OVERRIDE := CONFIG_QCA_CLD_WLAN=m
+
+obj-y += mmrm-driver/
+obj-y += mm-drivers/hw_fence/
+obj-y += mm-drivers/msm_ext_display/
+obj-y += mm-drivers/sync_fence/
+obj-y += audio-kernel/
+obj-y += securemsm-kernel/
+obj-y += synx-kernel/
+obj-y += camera-kernel/
+obj-y += data-kernel/drivers/smem-mailbox/
+obj-y += datarmnet-ext/mem/
+obj-y += dataipa/drivers/platform/msm/
+obj-y += datarmnet/core/
+obj-y += datarmnet-ext/aps/
+obj-y += datarmnet-ext/offload/
+obj-y += datarmnet-ext/perf/
+obj-y += datarmnet-ext/perf_tether/
+obj-y += datarmnet-ext/sch/
+obj-y += datarmnet-ext/shs/
+obj-y += datarmnet-ext/wlan/
+obj-y += display-drivers/msm/
+obj-y += dsp-kernel/
+obj-y += eva-kernel/
+obj-y += graphics-kernel/
+obj-y += spu-kernel/
+obj-y += video-driver/msm_video/
+obj-y += wlan/platform/
+obj-y += wlan/qcacld-3.0/
+obj-y += bt-kernel/
+obj-y += touch-driver/$(touch_variant)/

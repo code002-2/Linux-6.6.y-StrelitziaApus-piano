@@ -1,0 +1,263 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Xiaomi Pad 8 (yupei) audio: no WCD codec or WSA speakers. The four
+ * speakers sit behind fs19xx or sia91xx smart amplifiers on qupv3_se15,
+ * depending on the board, and the microphones are digital.
+ */
+
+#include "tuna-audio-mtp.dtsi"
+#include "yupei-audio-pinctrl.dtsi"
+
+&lpass_cdc {
+	qcom,num-macros = <3>;
+};
+
+&wcd9378_codec {
+	status = "disabled";
+};
+
+&wcd9378_tx_slave {
+	status = "disabled";
+};
+
+&wcd9378_rx_slave {
+	status = "disabled";
+};
+
+&wcd_rst_gpio {
+	status = "disabled";
+};
+
+&wcd_usbss {
+	status = "disabled";
+};
+
+&wsa_macro {
+	status = "disabled";
+};
+
+&swr0 {
+	status = "disabled";
+};
+
+&wsa884x_0220 {
+	status = "disabled";
+};
+
+&wsa884x_0221 {
+	status = "disabled";
+};
+
+&wsa_spkr_en02 {
+	status = "disabled";
+};
+
+&wsa_spkr_en13 {
+	status = "disabled";
+};
+
+&lpass_bt_swr {
+	status = "ok";
+};
+
+&cdc_pri_mi2s_gpios {
+	status = "ok";
+};
+
+&fm_i2s1_gpios {
+	status = "disabled";
+};
+
+&cdc_dmic01_gpios {
+	status = "ok";
+};
+
+&cdc_dmic23_gpios {
+	pinctrl-0 = <&cdc_dmic23_clk_active_p82 &cdc_dmic23_data_active_p82>;
+	status = "ok";
+};
+
+&cdc_dmic45_gpios {
+	status = "ok";
+};
+
+&soc {
+	cdc_dmic_enable_gpios: cdc_dmic_enable_pinctrl {
+		compatible = "qcom,msm-cdc-pinctrl";
+		pinctrl-names = "aud_active", "aud_sleep";
+		pinctrl-0 = <&cdc_dmic_enable_active>;
+		pinctrl-1 = <&cdc_dmic_enable_sleep>;
+		#gpio-cells = <0>;
+	};
+
+	si_pa_LT: si_pa_LT {
+		compatible = "si,sia91xx";
+		si,si_pa_type = "sia9187";
+		si,si_pa_reset = <&tlmm 124 0>;
+		si,si_pa_irq = <&tlmm 127 0>;
+		pinctrl-names = "si_pa_gpio", "si_pa_irq";
+		pinctrl-0 = <&sia91xx_gpio_LT_RESET>;
+		pinctrl-1 = <&sia91xx_gpio_LT_IRQ>;
+		si,is_digital_pa = <1>;
+		si,si_pa_disable_pin = <0>;
+		si,en_irq_func = <1>;
+		channel_num = <0>;
+	};
+
+	si_pa_RT: si_pa_RT {
+		compatible = "si,sia91xx";
+		si,si_pa_type = "sia9187";
+		si,si_pa_reset = <&tlmm 158 0>;
+		si,si_pa_irq = <&tlmm 149 0>;
+		pinctrl-names = "si_pa_gpio", "si_pa_irq";
+		pinctrl-0 = <&sia91xx_gpio_RT_RESET>;
+		pinctrl-1 = <&sia91xx_gpio_RT_IRQ>;
+		si,is_digital_pa = <1>;
+		si,si_pa_disable_pin = <0>;
+		si,en_irq_func = <1>;
+		channel_num = <1>;
+	};
+
+	si_pa_LB: si_pa_LB {
+		compatible = "si,sia91xx";
+		si,si_pa_type = "sia9187";
+		si,si_pa_reset = <&tlmm 148 0>;
+		si,si_pa_irq = <&tlmm 100 0>;
+		pinctrl-names = "si_pa_gpio", "si_pa_irq";
+		pinctrl-0 = <&sia91xx_gpio_LB_RESET>;
+		pinctrl-1 = <&sia91xx_gpio_LB_IRQ>;
+		si,is_digital_pa = <1>;
+		si,si_pa_disable_pin = <0>;
+		si,en_irq_func = <1>;
+		channel_num = <2>;
+	};
+
+	si_pa_RB: si_pa_RB {
+		compatible = "si,sia91xx";
+		si,si_pa_type = "sia9187";
+		si,si_pa_reset = <&tlmm 2 0>;
+		si,si_pa_irq = <&tlmm 3 0>;
+		pinctrl-names = "si_pa_gpio", "si_pa_irq";
+		pinctrl-0 = <&sia91xx_gpio_RB_RESET>;
+		pinctrl-1 = <&sia91xx_gpio_RB_IRQ>;
+		si,is_digital_pa = <1>;
+		si,si_pa_disable_pin = <0>;
+		si,en_irq_func = <1>;
+		channel_num = <3>;
+	};
+};
+
+&qupv3_se15_i2c {
+	status = "ok";
+
+	sipa_i2c_LT@6C {
+		compatible = "si,sia91xx-i2c";
+		reg = <0x6c>;
+		si,sipa-dev = <&si_pa_LT>;
+		sound-name-prefix = "SpkrLeft T";
+	};
+
+	sipa_i2c_RT@6D {
+		compatible = "si,sia91xx-i2c";
+		reg = <0x6d>;
+		si,sipa-dev = <&si_pa_RT>;
+		sound-name-prefix = "SpkrRight T";
+	};
+
+	sipa_i2c_LB@6E {
+		compatible = "si,sia91xx-i2c";
+		reg = <0x6e>;
+		si,sipa-dev = <&si_pa_LB>;
+		sound-name-prefix = "SpkrLeft B";
+	};
+
+	sipa_i2c_RB@6F {
+		compatible = "si,sia91xx-i2c";
+		reg = <0x6f>;
+		si,sipa-dev = <&si_pa_RB>;
+		sound-name-prefix = "SpkrRight B";
+	};
+
+	fs19xx_smartpa@34 {
+		compatible = "foursemi,fs16xx";
+		reg = <0x34>;
+		reset-gpio = <&tlmm 124 0>;
+		irq-gpio = <&tlmm 127 0x2008>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&fs19xx_irq_active_top_left>;
+		pinctrl-1 = <&fs19xx_irq_sleep_top_left>;
+		status = "ok";
+	};
+
+	fs19xx_smartpa@35 {
+		compatible = "foursemi,fs16xx";
+		reg = <0x35>;
+		reset-gpio = <&tlmm 158 0>;
+		irq-gpio = <&tlmm 149 0x2008>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&fs19xx_irq_active_top_right>;
+		pinctrl-1 = <&fs19xx_irq_sleep_top_right>;
+		status = "ok";
+	};
+
+	fs19xx_smartpa@37 {
+		compatible = "foursemi,fs16xx";
+		reg = <0x37>;
+		reset-gpio = <&tlmm 148 0>;
+		irq-gpio = <&tlmm 100 0x2008>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&fs19xx_irq_active_bottom_left>;
+		pinctrl-1 = <&fs19xx_irq_sleep_bottom_left>;
+		status = "ok";
+	};
+
+	fs19xx_smartpa@36 {
+		compatible = "foursemi,fs16xx";
+		reg = <0x36>;
+		reset-gpio = <&tlmm 2 0>;
+		irq-gpio = <&tlmm 3 0x2008>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&fs19xx_irq_active_bottom_right>;
+		pinctrl-1 = <&fs19xx_irq_sleep_bottom_right>;
+		status = "ok";
+	};
+};
+
+&tuna_snd {
+	/delete-property/ qcom,sec-mi2s-gpios;
+	qcom,pri-mi2s-gpios = <&cdc_pri_mi2s_gpios>;
+	qcom,cdc-dmic45-gpios = <&cdc_dmic45_gpios>;
+	qcom,cdc-dmic-enable-gpios = <&cdc_dmic_enable_gpios>;
+	fsa4480-i2c-handle = <&fsa4480>;
+	qcom,wcd-disabled = <1>;
+	qcom,wcd-disable-legacy-surge;
+	qcom,wsa-max-devs = <0>;
+	qcom,msm-mbhc-gnd-swh = <0>;
+	qcom,msm-mbhc-hphl-swh = <0>;
+	swr-haptics-unsupported;
+	qcom,tdm-audio-intf = <1>;
+	qcom,tdm-max-slots = <4>;
+	qcom,tdm-clk-attribute = <4 4 4 4 4 4 4 4>;
+	qcom,ext-disp-audio-rx = <1>;
+	qcom,audio-routing =
+		"TX DMIC0", "Digital Mic0",
+		"TX DMIC1", "Digital Mic1",
+		"TX DMIC2", "Digital Mic2",
+		"TX DMIC3", "Digital Mic3",
+		"TX DMIC4", "Digital Mic4",
+		"TX DMIC5", "Digital Mic5",
+		"RX_TX DEC0_INP", "TX DEC0 MUX",
+		"RX_TX DEC1_INP", "TX DEC1 MUX",
+		"RX_TX DEC2_INP", "TX DEC2 MUX",
+		"RX_TX DEC3_INP", "TX DEC3 MUX",
+		"VA SWR_INPUT", "VA_SWR_CLK",
+		"VA_AIF1 CAP", "VA_SWR_CLK",
+		"VA_AIF2 CAP", "VA_SWR_CLK",
+		"VA_AIF3 CAP", "VA_SWR_CLK",
+		"VA DMIC0", "Digital Mic0",
+		"VA DMIC1", "Digital Mic1",
+		"VA DMIC2", "Digital Mic2",
+		"VA DMIC3", "Digital Mic3",
+		"VA DMIC4", "Digital Mic4",
+		"VA DMIC5", "Digital Mic5";
+};

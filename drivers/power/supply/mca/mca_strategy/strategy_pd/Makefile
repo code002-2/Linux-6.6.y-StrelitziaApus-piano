@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: GPL-2.0
+
+obj-$(CONFIG_XM_POWER_SUPPLY)	+= mca_pd_auth.o

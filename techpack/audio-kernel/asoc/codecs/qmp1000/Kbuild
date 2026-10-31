@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2025 The LineageOS Project
+
+obj-$(CONFIG_SND_SOC_QMP) += qmp_dlkm.o
+qmp_dlkm-y += qmp-dmic.o qmp-aggregator.o
+ccflags-y :=	-I$(AUDIO_ROOT)/include

@@ -1,0 +1,108 @@
+config XM_POWER_SUPPLY
+	tristate "Xiaomi MCA power supply framework"
+	help
+	  Xiaomi Multi Charge Architecture (MCA) power-supply framework.
+
+if XM_POWER_SUPPLY
+
+# Protocol layer
+config MCA_PROTOCOL_PD
+	tristate "MCA USB Power Delivery protocol support"
+
+config MCA_PROTOCOL_QC
+	tristate "MCA Qualcomm QuickCharge protocol support"
+
+# External hardware IC drivers
+config MCA_EXTERNAL_FG
+	tristate "MCA external fuel gauge IC support"
+
+config MCA_PLATFORM_FG
+	tristate "MCA Qualcomm battery gauge support"
+	depends on MCA_QCOM_ADSP
+	depends on MCA_ONEWIRE_AUTH || !MCA_ONEWIRE_AUTH
+	help
+	  Fuel gauge driver for the Qualcomm battery gauge (QBG), which runs
+	  on the ADSP and is reached over the MCA glink channel.
+
+config MCA_ONEWIRE_AUTH
+	tristate "MCA onewire battery authentication support"
+	depends on MCA_QCOM_SMEM
+	select CRC16
+	select CRYPTO_ECC
+	select CRYPTO_LIB_SHA256
+	help
+	  Core of the onewire authentication chip in the battery pack. It
+	  checks that the pack is genuine, which the charging strategy needs
+	  before it allows fast charging, and keeps the serial number, dates,
+	  cycle count and UI state of health of the pack in the chip.
+
+config MCA_ONEWIRE_AUTH_ACL16_SLG2
+	tristate "ACL16 SLG2 battery authentication chip"
+	depends on MCA_ONEWIRE_AUTH
+
+config MCA_ONEWIRE_AUTH_DS28E30
+	tristate "Maxim DS28E30 battery authentication chip"
+	depends on MCA_ONEWIRE_AUTH
+
+config MCA_EXTERNAL_CP
+	tristate "MCA external charge pump IC support"
+
+config MCA_EXTERNAL_CP_SC8541
+	tristate "MCA SC8541 charge pump IC support"
+
+config MCA_EXTERNAL_CP_BQ25960
+	tristate "MCA TI BQ25960 charge pump IC support"
+	help
+	  Charge pump driver for the TI BQ25960, which some boards carry in
+	  place of the SC8541, including its reverse charging page.
+
+config MCA_EXTERNAL_WIRELESS
+	tristate "MCA external wireless charging IC support"
+
+config MCA_EXTERNAL_WIRELESS_SC96281
+	tristate "MCA SC96281 wireless charging IC support"
+
+config MCA_EXTERNAL_WIRELESS_SC96231
+	tristate "MCA SC96231 pen charger support"
+	help
+	  Driver for the Southchip SC96231 wireless transmitter that charges
+	  the stylus docked on the side of the tablet, with the hall sensors
+	  that see the pen.
+
+config MCA_EXTERNAL_LOADSWITCH
+	tristate "MCA external load switch IC support"
+
+config MCA_EXTERNAL_BOOST
+	tristate "MCA external boost IC support"
+
+# Qualcomm platform glue
+config MCA_QCOM_SUBPMIC
+	tristate "MCA Qualcomm sub-PMIC proxy support"
+
+config MCA_QCOM_ADSP
+	tristate "MCA Qualcomm ADSP glink support"
+
+config MCA_QCOM_SYSFS
+	tristate "MCA Qualcomm sysfs support"
+
+config MCA_QCOM_SMEM
+	tristate "MCA Qualcomm shared memory support"
+
+config MCA_QCOM_PANEL
+	tristate "MCA Qualcomm panel notifier support"
+
+# Shared memory
+config CHARGER_PARTITION
+	tristate "MCA charger partition (shared-memory charging state)"
+	default XM_POWER_SUPPLY
+	help
+	  Shared-memory charging state exchanged between LK/UEFI/ABL/ADSP,
+	  the kernel and the charging HAL. Core MCA component referenced
+	  unconditionally by the business/strategy layers; keep enabled with
+	  the framework.
+
+# Test
+config MCA_UT_TEST
+	tristate "MCA unit test module"
+
+endif # XM_POWER_SUPPLY

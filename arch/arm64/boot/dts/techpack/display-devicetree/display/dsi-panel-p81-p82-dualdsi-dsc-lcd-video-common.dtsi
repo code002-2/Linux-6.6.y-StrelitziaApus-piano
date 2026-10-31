@@ -1,0 +1,72 @@
+qcom,mdss-dsi-panel-width = <1600>; // dual dsi is 3200/2
+qcom,mdss-dsi-panel-height = <2136>;
+qcom,mdss-dsi-h-left-border = <0>;
+qcom,mdss-dsi-h-right-border = <0>;
+qcom,mdss-dsi-v-top-border = <0>;
+qcom,mdss-dsi-v-bottom-border = <0>;
+
+qcom,mdss-dsi-off-command = [
+    /*power off*/
+    05 00 00 00 14 00 01 28
+    05 00 00 00 64 00 01 10
+];
+
+qcom,mdss-dsi-on-command-state = "dsi_lp_mode";
+qcom,mdss-dsi-off-command-state = "dsi_lp_mode";
+qcom,mdss-dsi-timing-switch-video-command-state = "dsi_hs_mode";
+
+//dsc
+qcom,compression-mode = "dsc";
+qcom,mdss-dsc-version = <0x11>;
+qcom,mdss-dsc-scr-version = <0x0>;
+qcom,mdss-dsc-slice-height = <24>;
+qcom,mdss-dsc-slice-width = <800>;
+qcom,mdss-dsc-slice-per-pkt = <1>;
+qcom,mdss-dsc-bit-per-component = <10>;
+qcom,mdss-dsc-bit-per-pixel = <8>;
+qcom,mdss-dsc-block-prediction-enable;
+
+qcom,mdss-dsi-panel-phy-timings = [00 27 0A 0A 1B 19 0A
+    0B 0A 02 04 00 20 0F];
+qcom,display-topology = <2 2 2>;
+qcom,default-topology-index = <0>;
+
+mi,mdss-dsi-dispparam-pen-clear-command = [
+    39 00 00 40 00 00 02 FF 10
+    39 00 00 40 00 00 02 FB 01
+    39 00 00 00 00 00 02 B2 80
+];
+mi,mdss-dsi-dispparam-pen-clear-command-state = "dsi_lp_mode";
+
+mi,mdss-dsi-cabcuion-command = [
+    15 00 00 00 00 00 02 FF 10
+    15 00 00 00 00 00 02 55 01
+];
+mi,mdss-dsi-cabcstillon-command = [
+    15 00 00 00 00 00 02 FF 10
+    15 00 00 00 00 00 02 55 02
+];
+mi,mdss-dsi-cabcmovieon-command = [
+    15 00 00 00 00 00 02 FF 10
+    15 00 00 00 00 00 02 55 03
+];
+mi,mdss-dsi-cabcoff-command = [
+    15 00 00 00 00 00 02 FF 10
+    15 00 00 00 00 00 02 55 00
+];
+
+mi,mdss-dsi-cabcuion-command-state = "dsi_lp_mode";
+mi,mdss-dsi-cabcstillon-command-state = "dsi_lp_mode";
+mi,mdss-dsi-cabcmovieon-command-state = "dsi_lp_mode";
+mi,mdss-dsi-cabcoff-command-state = "dsi_lp_mode";
+mi,mdss-dsi-dimmingon-command-state = "dsi_lp_mode";
+mi,mdss-dsi-esd-on-command-state = "dsi_lp_mode";
+
+mi,mdss-dsi-disable-insert-black-command = [
+    15 00 00 00 00 00 02 FF 10
+    39 00 00 00 00 00 02 13 00];
+mi,mdss-dsi-disable-insert-black-command-state = "dsi_lp_mode";
+mi,mdss-dsi-insert-black-screen-command = [
+    15 00 00 00 00 00 02 FF 10
+    39 00 00 00 00 00 02 22 00];
+mi,mdss-dsi-insert-black-screen-command-state = "dsi_lp_mode";

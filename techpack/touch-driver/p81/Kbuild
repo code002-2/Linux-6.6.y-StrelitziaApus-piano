@@ -1,0 +1,26 @@
+include $(TOUCH_ROOT)/config/xiaomi_touch.conf
+LINUXINCLUDE += -include $(TOUCH_ROOT)/config/xiaomi_touch.h
+ifeq (1, $(strip $(CONFIG_TOUCH_FACTORY_SELECT)))
+LINUXINCLUDE += -include $(TOUCH_ROOT)/config/xiaomi_touch_factory.h
+endif
+ifeq (1, $(strip $(CONFIG_TOUCH_THP_SUPPORT)))
+KBUILD_CPPFLAGS += -DTOUCH_THP_SUPPORT
+endif
+ifeq (1, $(strip $(CONFIG_TOUCH_FOD_SUPPORT)))
+KBUILD_CPPFLAGS += -DTOUCH_FOD_SUPPORT
+endif
+ifeq (1, $(strip $(CONFIG_TOUCH_KNOCK_SUPPORT)))
+KBUILD_CPPFLAGS += -DTOUCH_KNOCK_SUPPORT
+endif
+ifeq (1, $(strip $(CONFIG_TOUCH_TDDI_SUPPORT)))
+KBUILD_CPPFLAGS += -DTOUCH_IS_TDDI
+endif
+ifeq (1, $(strip $(CONFIG_TOUCH_STYLUS_SUPPORT)))
+KBUILD_CPPFLAGS += -DTOUCH_STYLUS_SUPPORT
+endif
+ifeq (1, $(strip $(CONFIG_DISABLE_POWER_STATUS)))
+KBUILD_CPPFLAGS += -DDISABLE_POWER_STATUS
+endif
+
+obj-m += ../xiaomi/
+obj-m += nt36532/

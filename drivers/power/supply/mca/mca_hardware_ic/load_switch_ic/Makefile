@@ -1,0 +1,1 @@
+obj-$(CONFIG_XM_POWER_SUPPLY)	+= sc7601/
