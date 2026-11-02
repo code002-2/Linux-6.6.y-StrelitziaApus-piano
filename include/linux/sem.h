@@ -13,6 +13,10 @@ struct sysv_sem {
 	struct sem_undo_list *undo_list;
 };
 
+int sysv_task_fork_init(struct task_struct *tsk);
+int sysv_task_init(struct task_struct *tsk);
+void sysv_task_free(struct task_struct *tsk);
+struct sysv_sem *sysv_task_sem(struct task_struct *tsk);
 extern int copy_semundo(unsigned long clone_flags, struct task_struct *tsk);
 extern void exit_sem(struct task_struct *tsk);
 
@@ -21,6 +25,15 @@ extern void exit_sem(struct task_struct *tsk);
 struct sysv_sem {
 	/* empty */
 };
+
+static inline int sysv_task_fork_init(struct task_struct *tsk)
+{
+	return 0;
+}
+
+static inline void sysv_task_free(struct task_struct *tsk)
+{
+}
 
 static inline int copy_semundo(unsigned long clone_flags, struct task_struct *tsk)
 {

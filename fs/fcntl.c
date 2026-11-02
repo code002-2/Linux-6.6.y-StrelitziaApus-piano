@@ -291,6 +291,9 @@ static long fcntl_get_rw_hint(struct file *file, unsigned int cmd,
 	struct inode *inode = file_inode(file);
 	u64 __user *argp = (u64 __user *)arg;
 	u64 hint = READ_ONCE(inode->i_write_hint);
+		/* nothing is ever written to it */
+		if (IS_IMMUTABLE(inode))
+			return -EPERM;
 
 	if (copy_to_user(argp, &hint, sizeof(*argp)))
 		return -EFAULT;

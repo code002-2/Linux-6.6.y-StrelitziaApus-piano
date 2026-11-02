@@ -8,17 +8,19 @@
 #include <asm/shmparam.h>
 
 struct file;
+struct task_struct;
 
 #ifdef CONFIG_SYSVIPC
 struct sysv_shm {
 	struct list_head shm_clist;
 };
 
+struct sysv_shm *sysv_task_shm(struct task_struct *task);
 long do_shmat(int shmid, char __user *shmaddr, int shmflg, unsigned long *addr,
 	      unsigned long shmlba);
 bool is_file_shm_hugepages(struct file *file);
 void exit_shm(struct task_struct *task);
-#define shm_init_task(task) INIT_LIST_HEAD(&(task)->sysvshm.shm_clist)
+void shm_init_task(struct task_struct *task);
 #else
 struct sysv_shm {
 	/* empty */

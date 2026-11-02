@@ -145,12 +145,11 @@ void hci_read_supported_codecs(struct hci_dev *hdev)
 
 	skb_pull(skb, sizeof(rp->status));
 
-	std_codecs = skb_pull_data(skb, sizeof(*std_codecs));
-	if (!std_codecs)
-		goto error;
+	std_codecs = (void *)skb->data;
 
 	/* validate codecs length before accessing */
-	if (skb->len < flex_array_size(std_codecs, codec, std_codecs->num))
+	if (skb->len < flex_array_size(std_codecs, codec, std_codecs->num)
+	    + sizeof(std_codecs->num))
 		goto error;
 
 	/* enumerate codec capabilities of standard codecs */
@@ -162,14 +161,15 @@ void hci_read_supported_codecs(struct hci_dev *hdev)
 					    LOCAL_CODEC_ACL_MASK | LOCAL_CODEC_SCO_MASK, &caps);
 	}
 
-	skb_pull(skb, flex_array_size(std_codecs, codec, std_codecs->num));
+	skb_pull(skb, flex_array_size(std_codecs, codec, std_codecs->num)
+		 + sizeof(std_codecs->num));
 
-	vnd_codecs = skb_pull_data(skb, sizeof(*vnd_codecs));
-	if (!vnd_codecs)
-		goto error;
+	vnd_codecs = (void *)skb->data;
 
 	/* validate vendor codecs length before accessing */
-	if (skb->len < flex_array_size(vnd_codecs, codec, vnd_codecs->num))
+	if (skb->len <
+	    flex_array_size(vnd_codecs, codec, vnd_codecs->num)
+	    + sizeof(vnd_codecs->num))
 		goto error;
 
 	/* enumerate vendor codec capabilities */
@@ -214,12 +214,11 @@ void hci_read_supported_codecs_v2(struct hci_dev *hdev)
 
 	skb_pull(skb, sizeof(rp->status));
 
-	std_codecs = skb_pull_data(skb, sizeof(*std_codecs));
-	if (!std_codecs)
-		goto error;
+	std_codecs = (void *)skb->data;
 
 	/* check for payload data length before accessing */
-	if (skb->len < flex_array_size(std_codecs, codec, std_codecs->num))
+	if (skb->len < flex_array_size(std_codecs, codec, std_codecs->num)
+	    + sizeof(std_codecs->num))
 		goto error;
 
 	memset(&caps, 0, sizeof(caps));
@@ -230,14 +229,15 @@ void hci_read_supported_codecs_v2(struct hci_dev *hdev)
 					    &caps);
 	}
 
-	skb_pull(skb, flex_array_size(std_codecs, codec, std_codecs->num));
+	skb_pull(skb, flex_array_size(std_codecs, codec, std_codecs->num)
+		 + sizeof(std_codecs->num));
 
-	vnd_codecs = skb_pull_data(skb, sizeof(*vnd_codecs));
-	if (!vnd_codecs)
-		goto error;
+	vnd_codecs = (void *)skb->data;
 
 	/* check for payload data length before accessing */
-	if (skb->len < flex_array_size(vnd_codecs, codec, vnd_codecs->num))
+	if (skb->len <
+	    flex_array_size(vnd_codecs, codec, vnd_codecs->num)
+	    + sizeof(vnd_codecs->num))
 		goto error;
 
 	for (i = 0; i < vnd_codecs->num; i++) {

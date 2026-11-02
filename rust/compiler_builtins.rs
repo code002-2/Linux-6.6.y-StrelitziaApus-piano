@@ -20,6 +20,10 @@
 //! [`compiler-rt`]: https://compiler-rt.llvm.org/
 
 #![feature(compiler_builtins)]
+// StrelitziaApus: rustc 1.74+ promotes the internal_features lint to an
+// error under -D warnings, and this crate has to opt into that feature.
+// unknown_lints keeps the file building with older compilers too.
+#![allow(unknown_lints, internal_features)]
 #![compiler_builtins]
 #![no_builtins]
 #![no_std]

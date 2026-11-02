@@ -16,7 +16,9 @@
 #include <linux/netfilter.h>
 #include <linux/netfilter/nfnetlink.h>
 #include <linux/netfilter/nf_tables.h>
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 #include <net/netfilter/nf_flow_table.h>
+#endif
 #include <net/netfilter/nf_tables_core.h>
 #include <net/netfilter/nf_tables.h>
 #include <net/netfilter/nf_tables_offload.h>
@@ -30,7 +32,9 @@ unsigned int nf_tables_net_id __read_mostly;
 
 static LIST_HEAD(nf_tables_expressions);
 static LIST_HEAD(nf_tables_objects);
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 static LIST_HEAD(nf_tables_flowtables);
+#endif
 static LIST_HEAD(nf_tables_destroy_list);
 static LIST_HEAD(nf_tables_gc_list);
 static DEFINE_SPINLOCK(nf_tables_destroy_list_lock);
@@ -724,9 +728,10 @@ static int nft_delobj(struct nft_ctx *ctx, struct nft_object *obj)
 	return err;
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 static struct nft_trans *
 nft_trans_flowtable_add(struct nft_ctx *ctx, int msg_type,
-		        struct nft_flowtable *flowtable)
+			        struct nft_flowtable *flowtable)
 {
 	struct nft_trans *trans;
 
@@ -759,6 +764,7 @@ static int nft_delflowtable(struct nft_ctx *ctx,
 
 	return 0;
 }
+#endif
 
 /*
  * Tables
@@ -1431,7 +1437,9 @@ err_kzalloc:
 
 static int nft_flush_table(struct nft_ctx *ctx)
 {
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	struct nft_flowtable *flowtable, *nft;
+#endif
 	struct nft_chain *chain, *nc;
 	struct nft_object *obj, *ne;
 	struct nft_set *set, *ns;
@@ -1463,6 +1471,8 @@ static int nft_flush_table(struct nft_ctx *ctx)
 			goto out;
 	}
 
+
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	list_for_each_entry_safe(flowtable, nft, &ctx->table->flowtables, list) {
 		if (!nft_is_active_next(ctx->net, flowtable))
 			continue;
@@ -1471,6 +1481,7 @@ static int nft_flush_table(struct nft_ctx *ctx)
 		if (err < 0)
 			goto out;
 	}
+#endif
 
 	list_for_each_entry_safe(obj, ne, &ctx->table->objects, list) {
 		if (!nft_is_active_next(ctx->net, obj))
@@ -8233,6 +8244,7 @@ static void nf_tables_obj_notify(const struct nft_ctx *ctx,
 			 ctx->report, GFP_KERNEL);
 }
 
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 /*
  * Flow tables
  */
@@ -9183,6 +9195,50 @@ static int nf_tables_flowtable_event(struct notifier_block *this,
 static struct notifier_block nf_tables_flowtable_notifier = {
 	.notifier_call	= nf_tables_flowtable_event,
 };
+#else
+static void nft_hooks_destroy(struct list_head *hook_list)
+{
+	struct nft_hook *hook, *next;
+
+	list_for_each_entry_safe(hook, next, hook_list, list) {
+		list_del_rcu(&hook->list);
+		kfree_rcu(hook, rcu);
+	}
+}
+
+static int nf_tables_fill_gen_info(struct sk_buff *skb, struct net *net,
+					   u32 portid, u32 seq)
+{
+	struct nftables_pernet *nft_net = nft_pernet(net);
+	struct nlmsghdr *nlh;
+	char buf[TASK_COMM_LEN];
+	int event = nfnl_msg_type(NFNL_SUBSYS_NFTABLES, NFT_MSG_NEWGEN);
+
+	nlh = nfnl_msg_put(skb, portid, seq, event, 0, AF_UNSPEC,
+			   NFNETLINK_V0, nft_base_seq(net));
+	if (!nlh)
+		goto nla_put_failure;
+
+	if (nla_put_be32(skb, NFTA_GEN_ID, htonl(nft_net->base_seq)) ||
+	    nla_put_be32(skb, NFTA_GEN_PROC_PID, htonl(task_pid_nr(current))) ||
+	    nla_put_string(skb, NFTA_GEN_PROC_NAME, get_task_comm(buf, current)))
+		goto nla_put_failure;
+
+	nlmsg_end(skb, nlh);
+	return 0;
+
+nla_put_failure:
+	nlmsg_trim(skb, nlh);
+	return -EMSGSIZE;
+}
+
+static int nf_tables_flowtable_unsupported(struct sk_buff *skb,
+					   const struct nfnl_info *info,
+					   const struct nlattr * const nla[])
+{
+	return -EOPNOTSUPP;
+}
+#endif
 
 static void nf_tables_gen_notify(struct net *net, struct sk_buff *skb,
 				 int event)
@@ -9403,6 +9459,8 @@ static const struct nfnl_callback nf_tables_cb[NFT_MSG_MAX] = {
 		.attr_count	= NFTA_OBJ_MAX,
 		.policy		= nft_obj_policy,
 	},
+
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	[NFT_MSG_NEWFLOWTABLE] = {
 		.call		= nf_tables_newflowtable,
 		.type		= NFNL_CB_BATCH,
@@ -9427,6 +9485,24 @@ static const struct nfnl_callback nf_tables_cb[NFT_MSG_MAX] = {
 		.attr_count	= NFTA_FLOWTABLE_MAX,
 		.policy		= nft_flowtable_policy,
 	},
+#else
+	[NFT_MSG_NEWFLOWTABLE] = {
+		.call		= nf_tables_flowtable_unsupported,
+		.type		= NFNL_CB_BATCH,
+	},
+	[NFT_MSG_GETFLOWTABLE] = {
+		.call		= nf_tables_flowtable_unsupported,
+		.type		= NFNL_CB_RCU,
+	},
+	[NFT_MSG_DELFLOWTABLE] = {
+		.call		= nf_tables_flowtable_unsupported,
+		.type		= NFNL_CB_BATCH,
+	},
+	[NFT_MSG_DESTROYFLOWTABLE] = {
+		.call		= nf_tables_flowtable_unsupported,
+		.type		= NFNL_CB_BATCH,
+	},
+#endif
 };
 
 static int nf_tables_validate(struct net *net)
@@ -9555,6 +9631,7 @@ static void nft_commit_release(struct nft_trans *trans)
 	case NFT_MSG_DESTROYOBJ:
 		nft_obj_destroy(&trans->ctx, nft_trans_obj(trans));
 		break;
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	case NFT_MSG_DELFLOWTABLE:
 	case NFT_MSG_DESTROYFLOWTABLE:
 		if (nft_trans_flowtable_update(trans))
@@ -9562,6 +9639,7 @@ static void nft_commit_release(struct nft_trans *trans)
 		else
 			nf_tables_flowtable_destroy(nft_trans_flowtable(trans));
 		break;
+#endif
 	}
 
 	if (trans->put_net)
@@ -10268,7 +10346,7 @@ static int nf_tables_commit(struct net *net, struct sk_buff *skb)
 	gc_seq = nft_gc_seq_begin(nft_net);
 
 	/* step 3. Start new generation, rules_gen_X now in use. */
-	net->nft.gencursor = nft_gencursor_next(net);
+	nft_gencursor_set(net, nft_gencursor_next(net));
 
 	list_for_each_entry_safe(trans, next, &nft_net->commit_list, list) {
 		nf_tables_commit_audit_collect(&adl, trans->ctx.table,
@@ -10433,6 +10511,7 @@ static int nf_tables_commit(struct net *net, struct sk_buff *skb)
 			nf_tables_obj_notify(&trans->ctx, nft_trans_obj(trans),
 					     trans->msg_type);
 			break;
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 		case NFT_MSG_NEWFLOWTABLE:
 			if (nft_trans_flowtable_update(trans)) {
 				nft_trans_flowtable(trans)->data.flags =
@@ -10473,6 +10552,7 @@ static int nf_tables_commit(struct net *net, struct sk_buff *skb)
 						&nft_trans_flowtable(trans)->hook_list);
 			}
 			break;
+#endif
 		}
 	}
 
@@ -10530,12 +10610,14 @@ static void nf_tables_abort_release(struct nft_trans *trans)
 	case NFT_MSG_NEWOBJ:
 		nft_obj_destroy(&trans->ctx, nft_trans_obj(trans));
 		break;
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	case NFT_MSG_NEWFLOWTABLE:
 		if (nft_trans_flowtable_update(trans))
 			nft_hooks_destroy(&nft_trans_flowtable_hooks(trans));
 		else
 			nf_tables_flowtable_destroy(nft_trans_flowtable(trans));
 		break;
+#endif
 	}
 	kfree(trans);
 }
@@ -10719,6 +10801,7 @@ static int __nf_tables_abort(struct net *net, enum nfnl_abort_action action)
 			nft_clear(trans->ctx.net, nft_trans_obj(trans));
 			nft_trans_destroy(trans);
 			break;
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 		case NFT_MSG_NEWFLOWTABLE:
 			if (nft_trans_flowtable_update(trans)) {
 				nft_unregister_flowtable_net_hooks(net,
@@ -10743,6 +10826,7 @@ static int __nf_tables_abort(struct net *net, enum nfnl_abort_action action)
 			}
 			nft_trans_destroy(trans);
 			break;
+#endif
 		}
 	}
 
@@ -11312,15 +11396,19 @@ EXPORT_SYMBOL_GPL(__nft_release_basechain);
 
 static void __nft_release_hook(struct net *net, struct nft_table *table)
 {
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	struct nft_flowtable *flowtable;
+#endif
 	struct nft_chain *chain;
 
 	list_for_each_entry(chain, &table->chains, list)
 		__nf_tables_unregister_hook(net, table, chain, true);
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	list_for_each_entry(flowtable, &table->flowtables, list)
 		__nft_unregister_flowtable_net_hooks(net, flowtable,
 						     &flowtable->hook_list,
 						     true);
+#endif
 }
 
 static void __nft_release_hooks(struct net *net)
@@ -11338,7 +11426,9 @@ static void __nft_release_hooks(struct net *net)
 
 static void __nft_release_table(struct net *net, struct nft_table *table)
 {
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	struct nft_flowtable *flowtable, *nf;
+#endif
 	struct nft_chain *chain, *nc;
 	struct nft_object *obj, *ne;
 	struct nft_rule *rule, *nr;
@@ -11361,11 +11451,14 @@ static void __nft_release_table(struct net *net, struct nft_table *table)
 			nf_tables_rule_release(&ctx, rule);
 		}
 	}
+
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	list_for_each_entry_safe(flowtable, nf, &table->flowtables, list) {
 		list_del(&flowtable->list);
 		nft_use_dec(&table->use);
 		nf_tables_flowtable_destroy(flowtable);
 	}
+#endif
 	list_for_each_entry_safe(set, ns, &table->sets, list) {
 		list_del(&set->list);
 		nft_use_dec(&table->use);
@@ -11534,9 +11627,11 @@ static int __init nf_tables_module_init(void)
 	if (err < 0)
 		goto err_core_module;
 
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	err = register_netdevice_notifier(&nf_tables_flowtable_notifier);
 	if (err < 0)
 		goto err_netdev_notifier;
+#endif
 
 	err = rhltable_init(&nft_objname_ht, &nft_objname_ht_params);
 	if (err < 0)
@@ -11566,8 +11661,11 @@ err_netlink_notifier:
 err_offload:
 	rhltable_destroy(&nft_objname_ht);
 err_rht_objname:
+
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	unregister_netdevice_notifier(&nf_tables_flowtable_notifier);
 err_netdev_notifier:
+#endif
 	nf_tables_core_module_exit();
 err_core_module:
 	nft_chain_filter_fini();
@@ -11581,7 +11679,10 @@ static void __exit nf_tables_module_exit(void)
 	nfnetlink_subsys_unregister(&nf_tables_subsys);
 	netlink_unregister_notifier(&nft_nl_notifier);
 	nft_offload_exit();
+
+#if !IS_ENABLED(CONFIG_ANDROID_NFTABLES_KMI_EXT)
 	unregister_netdevice_notifier(&nf_tables_flowtable_notifier);
+#endif
 	nft_chain_filter_fini();
 	nft_chain_route_fini();
 	nf_tables_trans_destroy_flush_work();

@@ -966,7 +966,7 @@ struct sk_buff {
 	__u8			ndisc_nodetype:2;
 #endif
 
-#if IS_ENABLED(CONFIG_IP_VS)
+#if IS_ENABLED(CONFIG_IP_VS) && !IS_ENABLED(CONFIG_ANDROID_IPVS_KMI_EXT)
 	__u8			ipvs_property:1;
 #endif
 #if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || IS_ENABLED(CONFIG_NF_TABLES)
@@ -987,7 +987,7 @@ struct sk_buff {
 	__u8			decrypted:1;
 #endif
 	__u8			slow_gro:1;
-#if IS_ENABLED(CONFIG_IP_SCTP)
+#if IS_ENABLED(CONFIG_IP_SCTP) && !IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
 	__u8			csum_not_inet:1;
 #endif
 
@@ -1065,6 +1065,21 @@ struct sk_buff {
 	struct skb_ext		*extensions;
 #endif
 };
+
+#if IS_ENABLED(CONFIG_ANDROID_IPVS_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+static_assert(sizeof(struct sk_buff) == 240,
+	      "Android KMI skb flags require the GKI sk_buff size");
+static_assert(offsetof(struct sk_buff, tc_index) == 132,
+	      "Android KMI skb flags require the GKI tc_index offset");
+#endif
+
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+static_assert(sizeof_field(struct sk_buff, active_extensions) == sizeof(__u8),
+	      "Android SCTP KMI extension requires an eight-bit active mask");
+static_assert(offsetof(struct sk_buff, active_extensions) == 127,
+	      "Android SCTP KMI extension requires the GKI active mask offset");
+#endif
 
 /* if you move pkt_type around you also must adapt those constants */
 #ifdef __BIG_ENDIAN_BITFIELD
@@ -4732,7 +4747,8 @@ static inline void skb_set_nfct(struct sk_buff *skb, unsigned long nfct)
 
 #ifdef CONFIG_SKB_EXTENSIONS
 enum skb_ext_id {
-#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER) && \
+	!IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
 	SKB_EXT_BRIDGE_NF,
 #endif
 #ifdef CONFIG_XFRM
@@ -4750,6 +4766,26 @@ enum skb_ext_id {
 	SKB_EXT_NUM, /* must be last */
 };
 
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
+/* Bit 7 is private to the frozen arm64 GKI skb extension profile. */
+#define SKB_EXT_BRIDGE_NF	((enum skb_ext_id)7)
+#endif
+
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+/* Bit 6 is private to the frozen arm64 GKI skb extension profile. */
+#define SKB_EXT_SCTP_CSUM	((enum skb_ext_id)6)
+static_assert(SKB_EXT_SCTP_CSUM == 6,
+		"Android SCTP KMI extension must remain at bit 6");
+static_assert(SKB_EXT_SCTP_CSUM < 8,
+		"Android SCTP KMI extension exceeds active_extensions");
+#endif
+
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) && \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+static_assert(SKB_EXT_SCTP_CSUM != SKB_EXT_BRIDGE_NF,
+		"Android SCTP and bridge KMI extensions overlap");
+#endif
+
 /**
  *	struct skb_ext - sk_buff extensions
  *	@refcnt: 1 on allocation, deallocated on 0
@@ -4766,6 +4802,14 @@ struct skb_ext {
 	u8 chunks;		/* same */
 	char data[] __aligned(8);
 };
+
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+static_assert(SKB_EXT_SEC_PATH == 0,
+		"Android KMI skb extension requires secpath at slot 0");
+static_assert(SKB_EXT_NUM == 1,
+		"Android KMI skb extension requires one native skb extension");
+#endif
 
 struct skb_ext *__skb_ext_alloc(gfp_t flags);
 void *__skb_ext_set(struct sk_buff *skb, enum skb_ext_id id,
@@ -4820,6 +4864,14 @@ static inline void *skb_ext_find(const struct sk_buff *skb, enum skb_ext_id id)
 	if (skb_ext_exist(skb, id)) {
 		struct skb_ext *ext = skb->extensions;
 
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
+		if (id == SKB_EXT_BRIDGE_NF)
+			return ext->data;
+#endif
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+		if (id == SKB_EXT_SCTP_CSUM)
+			return ext->data;
+#endif
 		return (void *)ext + (ext->offset[id] << 3);
 	}
 
@@ -4862,11 +4914,63 @@ static inline void nf_reset_trace(struct sk_buff *skb)
 #endif
 }
 
-static inline void ipvs_reset(struct sk_buff *skb)
+static inline bool skb_ipvs_property(const struct sk_buff *skb)
 {
 #if IS_ENABLED(CONFIG_IP_VS)
+#if IS_ENABLED(CONFIG_ANDROID_IPVS_KMI_EXT)
+	const u8 *flags = (const u8 *)skb + offsetof(struct sk_buff, tc_index) -
+			  sizeof(*flags);
+
+	/* The final bit before tc_index is a verified GKI layout hole. */
+	return READ_ONCE(*flags) & BIT(7);
+#else
+	return skb->ipvs_property;
+#endif
+#else
+	return false;
+#endif
+}
+
+static inline void skb_set_ipvs_property(struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IP_VS)
+#if IS_ENABLED(CONFIG_ANDROID_IPVS_KMI_EXT)
+	u8 *flags = (u8 *)skb + offsetof(struct sk_buff, tc_index) -
+		    sizeof(*flags);
+
+	WRITE_ONCE(*flags, READ_ONCE(*flags) | BIT(7));
+#else
+	skb->ipvs_property = 1;
+#endif
+#endif
+}
+
+static inline void skb_clear_ipvs_property(struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IP_VS)
+#if IS_ENABLED(CONFIG_ANDROID_IPVS_KMI_EXT)
+	u8 *flags = (u8 *)skb + offsetof(struct sk_buff, tc_index) -
+		    sizeof(*flags);
+
+	WRITE_ONCE(*flags, READ_ONCE(*flags) & ~BIT(7));
+#else
 	skb->ipvs_property = 0;
 #endif
+#endif
+}
+
+static inline void skb_copy_ipvs_property(struct sk_buff *to,
+					  const struct sk_buff *from)
+{
+	if (skb_ipvs_property(from))
+		skb_set_ipvs_property(to);
+	else
+		skb_clear_ipvs_property(to);
+}
+
+static inline void ipvs_reset(struct sk_buff *skb)
+{
+	skb_clear_ipvs_property(skb);
 }
 
 /* Note: This doesn't put any conntrack info in dst. */
@@ -5137,9 +5241,27 @@ static inline void skb_set_redirected_noclear(struct sk_buff *skb,
 static inline bool skb_csum_is_sctp(struct sk_buff *skb)
 {
 #if IS_ENABLED(CONFIG_IP_SCTP)
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	return skb_ext_exist(skb, SKB_EXT_SCTP_CSUM);
+#else
 	return skb->csum_not_inet;
+#endif
 #else
 	return 0;
+#endif
+}
+
+static inline bool skb_set_csum_not_inet(struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IP_SCTP)
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	return skb_ext_add(skb, SKB_EXT_SCTP_CSUM) != NULL;
+#else
+	skb->csum_not_inet = 1;
+	return true;
+#endif
+#else
+	return false;
 #endif
 }
 
@@ -5147,7 +5269,11 @@ static inline void skb_reset_csum_not_inet(struct sk_buff *skb)
 {
 	skb->ip_summed = CHECKSUM_NONE;
 #if IS_ENABLED(CONFIG_IP_SCTP)
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	skb_ext_del(skb, SKB_EXT_SCTP_CSUM);
+#else
 	skb->csum_not_inet = 0;
+#endif
 #endif
 }
 

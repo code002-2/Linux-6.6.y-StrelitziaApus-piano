@@ -59,21 +59,6 @@ static char default_governor[CPUFREQ_NAME_LEN];
  */
 static struct cpufreq_driver *cpufreq_driver;
 static DEFINE_PER_CPU(struct cpufreq_policy *, cpufreq_cpu_data);
-
-/*
- * Qualcomm ships a vendor module (qcom-cpufreq-thermal) that pushes a
- * frequency ceiling through freq QoS, so writing scaling_max_freq below that
- * ceiling is silently clamped and the CPU can never reach the frequencies its
- * OPP table advertises. Setting this to 1 makes the policy ignore the
- * aggregated QoS maximum and use the hardware maximum instead.
- *
- * This removes thermal frequency limiting. Only enable it on a device that has
- * the cooling to cope, and watch the zone temperatures afterwards.
- */
-static bool cpufreq_ignore_qos_max;
-module_param_named(ignore_qos_max, cpufreq_ignore_qos_max, bool, 0644);
-MODULE_PARM_DESC(ignore_qos_max,
-		 "Ignore freq QoS maximum and allow the hardware maximum frequency");
 static DEFINE_RWLOCK(cpufreq_driver_lock);
 
 static DEFINE_STATIC_KEY_FALSE(cpufreq_freq_invariance);
@@ -1276,7 +1261,7 @@ static struct cpufreq_policy *cpufreq_policy_alloc(unsigned int cpu)
 	if (!policy)
 		return NULL;
 
-	if (!zalloc_cpumask_var(&policy->cpus, GFP_KERNEL))
+	if (!alloc_cpumask_var(&policy->cpus, GFP_KERNEL))
 		goto err_free_policy;
 
 	if (!zalloc_cpumask_var(&policy->related_cpus, GFP_KERNEL))
@@ -1284,8 +1269,6 @@ static struct cpufreq_policy *cpufreq_policy_alloc(unsigned int cpu)
 
 	if (!zalloc_cpumask_var(&policy->real_cpus, GFP_KERNEL))
 		goto err_free_rcpumask;
-
-	init_rwsem(&policy->rwsem);
 
 	init_completion(&policy->kobj_unregister);
 	ret = kobject_init_and_add(&policy->kobj, &ktype_cpufreq,
@@ -1300,6 +1283,8 @@ static struct cpufreq_policy *cpufreq_policy_alloc(unsigned int cpu)
 		kobject_put(&policy->kobj);
 		goto err_free_real_cpus;
 	}
+
+	init_rwsem(&policy->rwsem);
 
 	freq_constraints_init(&policy->constraints);
 
@@ -2648,9 +2633,6 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 	 */
 	new_data.min = freq_qos_read_value(&policy->constraints, FREQ_QOS_MIN);
 	new_data.max = freq_qos_read_value(&policy->constraints, FREQ_QOS_MAX);
-
-	if (unlikely(cpufreq_ignore_qos_max))
-		new_data.max = policy->cpuinfo.max_freq;
 
 	pr_debug("setting new policy for CPU %u: %u - %u kHz\n",
 		 new_data.cpu, new_data.min, new_data.max);

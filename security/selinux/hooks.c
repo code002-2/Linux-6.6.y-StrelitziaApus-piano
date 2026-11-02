@@ -677,8 +677,12 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 	 * will be used for both mounts)
 	 */
 	if ((sbsec->flags & SE_SBINITIALIZED) && (sb->s_type->fs_flags & FS_BINARY_MOUNTDATA)
-	    && !opts)
+		&& !opts) {
+		if ((kern_flags & SECURITY_LSM_NATIVE_LABELS) &&
+		    sbsec->behavior == SECURITY_FS_USE_NATIVE)
+			*set_kern_flags |= SECURITY_LSM_NATIVE_LABELS;
 		goto out;
+	}
 
 	root_isec = backing_inode_security_novalidate(root);
 
@@ -722,6 +726,9 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 		/* previously mounted with options, but not on this attempt? */
 		if ((sbsec->flags & SE_MNTMASK) && !opts)
 			goto out_double_mount;
+		if ((kern_flags & SECURITY_LSM_NATIVE_LABELS) &&
+		    sbsec->behavior == SECURITY_FS_USE_NATIVE)
+			*set_kern_flags |= SECURITY_LSM_NATIVE_LABELS;
 		rc = 0;
 		goto out;
 	}
@@ -7309,52 +7316,12 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
 #endif
 };
 
-/*
- * Keep SELinux permissive. Writing 1 switches to permissive immediately and
- * from then on sel_write_enforce() rejects any request to go back to
- * enforcing, so a userspace component that calls setenforce(1) at boot or
- * later cannot override it.
- */
-/* dev-permissive: permissive from the very first moment, before any
- * userspace component gets a chance to call setenforce(1). */
-bool selinux_force_permissive = true;
-
-static int selinux_force_permissive_set(const char *val,
-					const struct kernel_param *kp)
-{
-	bool enable;
-	int ret;
-
-	ret = kstrtobool(val, &enable);
-	if (ret)
-		return ret;
-
-	WRITE_ONCE(selinux_force_permissive, enable);
-
-	if (enable && selinux_initialized()) {
-		enforcing_set(false);
-		pr_info("SELinux:  permissive forced, enforcing is now locked out\n");
-	}
-
-	return 0;
-}
-
-static const struct kernel_param_ops selinux_force_permissive_ops = {
-	.set	= selinux_force_permissive_set,
-	.get	= param_get_bool,
-};
-
-module_param_cb(force_permissive, &selinux_force_permissive_ops,
-		&selinux_force_permissive, 0644);
-MODULE_PARM_DESC(force_permissive,
-	"Keep SELinux permissive and refuse any later switch to enforcing");
-
 static __init int selinux_init(void)
 {
 	pr_info("SELinux:  Initializing.\n");
 
 	memset(&selinux_state, 0, sizeof(selinux_state));
-	enforcing_set(selinux_force_permissive ? false : selinux_enforcing_boot);
+	enforcing_set(selinux_enforcing_boot);
 	selinux_avc_init();
 	mutex_init(&selinux_state.status_lock);
 	mutex_init(&selinux_state.policy_mutex);

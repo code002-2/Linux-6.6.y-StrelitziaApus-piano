@@ -2356,7 +2356,7 @@ out:
 		REPEAT(x, COPY, __DL_SEM, __SEQ_0_11);			\
 		__bpf_trace_run(prog, args);				\
 	}								\
-	EXPORT_SYMBOL_GPL(bpf_trace_run##x)
+	EXPORT_SYMBOL(bpf_trace_run##x)  /* code002: 放开给 ZFS 模块 */
 BPF_TRACE_DEFN_x(1);
 BPF_TRACE_DEFN_x(2);
 BPF_TRACE_DEFN_x(3);

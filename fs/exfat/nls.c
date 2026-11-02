@@ -11,6 +11,21 @@
 #include "exfat_raw.h"
 #include "exfat_fs.h"
 
+#ifdef CONFIG_RUST
+/* The upcase table decoder lives in exfat_rust.rs. */
+struct rust_upcase_state {
+	unsigned int index;
+	bool skip;
+	unsigned int consumed;
+};
+extern struct rust_upcase_state rust_exfat_upcase_feed(const void *src,
+						       unsigned int byte_len,
+						       unsigned short *table,
+						       unsigned int table_len,
+						       unsigned int index,
+						       bool skip);
+#endif
+
 /* Upcase table macro */
 #define EXFAT_NUM_UPCASE	(2918)
 #define UTBL_COUNT		(0x10000)
@@ -675,6 +690,18 @@ static int exfat_load_upcase_table(struct super_block *sb,
 			return -EIO;
 		}
 		sector++;
+#ifdef CONFIG_RUST
+		{
+			struct rust_upcase_state st;
+
+			st = rust_exfat_upcase_feed(bh->b_data, sect_size,
+						    sbi->vol_utbl, UTBL_COUNT,
+						    index, skip);
+			index = st.index;
+			skip = st.skip;
+			i = st.consumed;
+		}
+#else
 		for (i = 0; i < sect_size && index <= 0xFFFF; i += 2) {
 			unsigned short uni = get_unaligned_le16(bh->b_data + i);
 
@@ -690,6 +717,7 @@ static int exfat_load_upcase_table(struct super_block *sb,
 				index++;
 			}
 		}
+#endif
 		chksum = exfat_calc_chksum32(bh->b_data, i, chksum, CS_DEFAULT);
 		brelse(bh);
 	}
@@ -772,15 +800,23 @@ int exfat_create_upcase_table(struct super_block *sb)
 
 			tbl_clu  = le32_to_cpu(ep->dentry.upcase.start_clu);
 			tbl_size = le64_to_cpu(ep->dentry.upcase.size);
-
-			sector = exfat_cluster_to_sector(sbi, tbl_clu);
-			num_sectors = ((tbl_size - 1) >> blksize_bits) + 1;
-			ret = exfat_load_upcase_table(sb, sector, num_sectors,
-				le32_to_cpu(ep->dentry.upcase.checksum));
-
+			if (tbl_size) {
+				sector = exfat_cluster_to_sector(sbi, tbl_clu);
+				num_sectors = ((tbl_size - 1) >> blksize_bits) + 1;
+				ret = exfat_load_upcase_table(sb, sector, num_sectors,
+					le32_to_cpu(ep->dentry.upcase.checksum));
+			} else {
+				exfat_fs_error(sb,
+					       "bad upcase table size (0 bytes). Please run fsck");
+				ret = -EINVAL;
+			}
 			brelse(bh);
-			if (ret && ret != -EIO)
+
+			if (ret && ret != -EIO) {
+				/* free memory from exfat_load_upcase_table call */
+				exfat_free_upcase_table(sbi);
 				goto load_default;
+			}
 
 			/* load successfully */
 			return ret;
@@ -789,6 +825,8 @@ int exfat_create_upcase_table(struct super_block *sb)
 		if (exfat_get_next_cluster(sb, &(clu.dir)))
 			return -EIO;
 	}
+
+	exfat_fs_error(sb, "no upcase table entry. Please run fsck");
 
 load_default:
 	/* load default upcase table */

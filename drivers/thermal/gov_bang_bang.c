@@ -13,6 +13,15 @@
 
 #include "thermal_core.h"
 
+#ifdef CONFIG_RUST
+/* The two point hysteresis policy lives in gov_bang_bang_rust.rs. */
+extern bool rust_bang_bang_target_is_valid(unsigned long target);
+extern unsigned long rust_bang_bang_next_target(unsigned long target,
+						int temperature,
+						int trip_temperature,
+						int hysteresis);
+#endif
+
 static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_index)
 {
 	const struct thermal_trip *trip = &tz->trips[trip_index];
@@ -30,6 +39,16 @@ static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_ind
 		if (instance->trip != trip)
 			continue;
 
+#ifdef CONFIG_RUST
+		if (!rust_bang_bang_target_is_valid(instance->target))
+			pr_warn("Thermal instance %s controlled by bang-bang has unexpected state: %ld\n",
+					instance->name, instance->target);
+
+		instance->target = rust_bang_bang_next_target(instance->target,
+							      tz->temperature,
+							      trip->temperature,
+							      trip->hysteresis);
+#else
 		/* in case fan is in initial state, switch the fan off */
 		if (instance->target == THERMAL_NO_TARGET)
 			instance->target = 0;
@@ -50,6 +69,7 @@ static int thermal_zone_trip_update(struct thermal_zone_device *tz, int trip_ind
 		else if (instance->target == 1 &&
 			 tz->temperature <= trip->temperature - trip->hysteresis)
 			instance->target = 0;
+#endif
 
 		dev_dbg(&instance->cdev->device, "target=%d\n",
 					(int)instance->target);

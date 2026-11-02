@@ -109,13 +109,6 @@ void selinux_avc_init(void);
 
 extern struct selinux_state selinux_state;
 
-/*
- * When set, SELinux stays permissive and any attempt to enable enforcing is
- * refused. Some vendor components re-enable enforcing on their own, so a
- * plain setenforce 0 does not hold; this makes permissive stick.
- */
-extern bool selinux_force_permissive;
-
 static inline bool selinux_initialized(void)
 {
 	/* do a synchronized load to avoid race conditions */

@@ -12,6 +12,12 @@
 #include "exfat_raw.h"
 #include "exfat_fs.h"
 
+#ifdef CONFIG_RUST
+/* Trailing dot trimming lives in exfat_rust.rs. */
+extern unsigned int rust_exfat_striptail_len(unsigned int len, const u8 *name,
+					     bool keep_last_dots);
+#endif
+
 static inline unsigned long exfat_d_version(struct dentry *dentry)
 {
 	return (unsigned long) dentry->d_fsdata;
@@ -69,11 +75,15 @@ static int exfat_d_revalidate(struct dentry *dentry, unsigned int flags)
 static unsigned int exfat_striptail_len(unsigned int len, const char *name,
 					bool keep_last_dots)
 {
+#ifdef CONFIG_RUST
+	return rust_exfat_striptail_len(len, (const u8 *)name, keep_last_dots);
+#else
 	if (!keep_last_dots) {
 		while (len && name[len - 1] == '.')
 			len--;
 	}
 	return len;
+#endif
 }
 
 /*
@@ -637,14 +647,19 @@ static int exfat_find(struct inode *dir, struct qstr *qname,
 	info->size = le64_to_cpu(ep2->dentry.stream.valid_size);
 	info->valid_size = le64_to_cpu(ep2->dentry.stream.valid_size);
 	info->size = le64_to_cpu(ep2->dentry.stream.size);
+
+	info->start_clu = le32_to_cpu(ep2->dentry.stream.start_clu);
+	if (!is_valid_cluster(sbi, info->start_clu) && info->size) {
+		exfat_warn(sb, "start_clu is invalid cluster(0x%x)",
+				info->start_clu);
+		info->size = 0;
+	}
+
 	if (info->size == 0) {
 		info->flags = ALLOC_NO_FAT_CHAIN;
 		info->start_clu = EXFAT_EOF_CLUSTER;
-	} else {
+	} else
 		info->flags = ep2->dentry.stream.flags;
-		info->start_clu =
-			le32_to_cpu(ep2->dentry.stream.start_clu);
-	}
 
 	exfat_get_entry_time(sbi, &info->crtime,
 			     ep->dentry.file.create_tz,

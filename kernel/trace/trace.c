@@ -2696,7 +2696,7 @@ enum print_line_t trace_handle_return(struct trace_seq *s)
 	return trace_seq_has_overflowed(s) ?
 		TRACE_TYPE_PARTIAL_LINE : TRACE_TYPE_HANDLED;
 }
-EXPORT_SYMBOL_GPL(trace_handle_return);
+EXPORT_SYMBOL(trace_handle_return);  /* code002: 放开给 ZFS 模块 */
 
 static unsigned short migration_disable_value(void)
 {
@@ -3029,7 +3029,7 @@ discard:
 		event_triggers_post_call(file, tt);
 
 }
-EXPORT_SYMBOL_GPL(trace_event_buffer_commit);
+EXPORT_SYMBOL(trace_event_buffer_commit);  /* code002: 放开给 ZFS 模块 */
 
 /*
  * Skip 3:

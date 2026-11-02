@@ -27,6 +27,18 @@
  *       state for this trip point, if the cooling state already
  *       equals lower limit, deactivate the thermal instance
  */
+#ifdef CONFIG_RUST
+/*
+ * The policy itself lives in gov_step_wise_rust.rs; the state of the cooling
+ * device and of the instance is read here, where the internal structures are
+ * visible.
+ */
+extern unsigned long rust_step_wise_next_target(bool initialized, bool throttle,
+						int trend, unsigned long cur_state,
+						unsigned long lower, unsigned long upper,
+						unsigned long target);
+#endif
+
 static unsigned long get_target_state(struct thermal_instance *instance,
 				enum thermal_trend trend, bool throttle)
 {
@@ -43,6 +55,11 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 	next_target = instance->target;
 	dev_dbg(&cdev->device, "cur_state=%ld\n", cur_state);
 
+#ifdef CONFIG_RUST
+	return rust_step_wise_next_target(instance->initialized, throttle,
+					  (int)trend, cur_state, instance->lower,
+					  instance->upper, next_target);
+#else
 	if (!instance->initialized) {
 		if (throttle) {
 			next_target = clamp((cur_state + 1), instance->lower, instance->upper);
@@ -66,6 +83,7 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 	}
 
 	return next_target;
+#endif
 }
 
 static void update_passive_instance(struct thermal_zone_device *tz,

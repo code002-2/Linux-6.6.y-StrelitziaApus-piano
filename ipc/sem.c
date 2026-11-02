@@ -77,6 +77,7 @@
 #include <linux/proc_fs.h>
 #include <linux/time.h>
 #include <linux/security.h>
+#include <linux/sem.h>
 #include <linux/syscalls.h>
 #include <linux/audit.h>
 #include <linux/capability.h>
@@ -1850,8 +1851,17 @@ COMPAT_SYSCALL_DEFINE4(old_semctl, int, semid, int, semnum, int, cmd, int, arg)
 static inline int get_undo_list(struct sem_undo_list **undo_listp)
 {
 	struct sem_undo_list *undo_list;
+	struct sysv_sem *sysvsem;
+	int error;
 
-	undo_list = current->sysvsem.undo_list;
+	error = sysv_task_init(current);
+	if (error)
+		return error;
+	sysvsem = sysv_task_sem(current);
+	if (WARN_ON_ONCE(!sysvsem))
+		return -ENOMEM;
+
+	undo_list = sysvsem->undo_list;
 	if (!undo_list) {
 		undo_list = kzalloc(sizeof(*undo_list), GFP_KERNEL_ACCOUNT);
 		if (undo_list == NULL)
@@ -1860,7 +1870,7 @@ static inline int get_undo_list(struct sem_undo_list **undo_listp)
 		refcount_set(&undo_list->refcnt, 1);
 		INIT_LIST_HEAD(&undo_list->list_proc);
 
-		current->sysvsem.undo_list = undo_list;
+		sysvsem->undo_list = undo_list;
 	}
 	*undo_listp = undo_list;
 	return 0;
@@ -2306,16 +2316,27 @@ SYSCALL_DEFINE3(semop, int, semid, struct sembuf __user *, tsops,
 int copy_semundo(unsigned long clone_flags, struct task_struct *tsk)
 {
 	struct sem_undo_list *undo_list;
+	struct sysv_sem *sysvsem;
 	int error;
 
 	if (clone_flags & CLONE_SYSVSEM) {
+		error = sysv_task_init(tsk);
+		if (error)
+			return error;
+		sysvsem = sysv_task_sem(tsk);
+		if (WARN_ON_ONCE(!sysvsem))
+			return -ENOMEM;
+
 		error = get_undo_list(&undo_list);
 		if (error)
 			return error;
 		refcount_inc(&undo_list->refcnt);
-		tsk->sysvsem.undo_list = undo_list;
-	} else
-		tsk->sysvsem.undo_list = NULL;
+		sysvsem->undo_list = undo_list;
+	} else {
+		sysvsem = sysv_task_sem(tsk);
+		if (sysvsem)
+			sysvsem->undo_list = NULL;
+	}
 
 	return 0;
 }
@@ -2335,11 +2356,15 @@ int copy_semundo(unsigned long clone_flags, struct task_struct *tsk)
 void exit_sem(struct task_struct *tsk)
 {
 	struct sem_undo_list *ulp;
+	struct sysv_sem *sysvsem;
 
-	ulp = tsk->sysvsem.undo_list;
+	sysvsem = sysv_task_sem(tsk);
+	if (!sysvsem)
+		return;
+	ulp = sysvsem->undo_list;
 	if (!ulp)
 		return;
-	tsk->sysvsem.undo_list = NULL;
+	sysvsem->undo_list = NULL;
 
 	if (!refcount_dec_and_test(&ulp->refcnt))
 		return;

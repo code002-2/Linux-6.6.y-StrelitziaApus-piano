@@ -6,6 +6,12 @@ menuconfig IP_VS
 	tristate "IP virtual server support"
 	depends on INET && NETFILTER
 	depends on (NF_CONNTRACK || NF_CONNTRACK=n)
+	# Android GKI has no native IPVS slots in struct net or sk_buff. Keep
+	# this feature unavailable if the verified spare sk_buff bit is not there.
+	depends on !ANDROID_KABI_RESERVE || (ARM64 && !CPU_BIG_ENDIAN && \
+		(IP_SCTP = n || ANDROID_SCTP_KMI_EXT) && TLS_DEVICE = n && NET_SWITCHDEV = n && \
+		IPV6_NDISC_NODETYPE && NET_REDIRECT && NETFILTER_SKIP_EGRESS && \
+		NETFILTER_XT_TARGET_TRACE != n && (NET_SCHED || NET_XGRESS))
 	help
 	  IP Virtual Server support will let you build a high-performance
 	  virtual server based on cluster of two or more real servers. This
@@ -350,3 +356,32 @@ config	IP_VS_PE_SIP
 	  Allow persistence based on the SIP Call-ID
 
 endif # IP_VS
+
+config ANDROID_NETFILTER_KMI_EXT
+	def_bool y
+	depends on ANDROID_KABI_RESERVE
+	depends on NETFILTER_FAMILY_BRIDGE || IP_VS != n
+	help
+	  Store bridge hook state and IPVS's namespace pointer in a sidecar
+	  referenced through the verified arm64 GKI struct net alignment hole.
+	  This prevents optional netfilter features from expanding netns_nf or
+	  struct net while preserving their independent availability.
+
+config ANDROID_IPVS_KMI_EXT
+	def_bool y
+	depends on IP_VS != n && ANDROID_KABI_RESERVE
+	depends on ANDROID_NETFILTER_KMI_EXT
+	depends on ARM64 && !CPU_BIG_ENDIAN
+	depends on IP_SCTP = n || ANDROID_SCTP_KMI_EXT
+	depends on TLS_DEVICE = n
+	depends on NET_SWITCHDEV = n
+	depends on IPV6_NDISC_NODETYPE && NET_REDIRECT && NETFILTER_SKIP_EGRESS
+	depends on NETFILTER_XT_TARGET_TRACE != n
+	depends on NET_SCHED || NET_XGRESS
+	help
+	  Keep IPVS's namespace pointer in the netfilter sidecar and use the
+	  unused IPVS bit in the frozen GKI sk_buff layout. SCTP uses a separate
+	  private skb extension when ANDROID_SCTP_KMI_EXT is selected; TLS device
+	  offload and switchdev must remain disabled because they change the
+	  surrounding layout. This is selected automatically so an Android KABI
+	  configuration cannot fall back to layout-changing native storage.

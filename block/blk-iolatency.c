@@ -1043,6 +1043,15 @@ static struct cftype iolatency_files[] = {
 		.name = "latency",
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.seq_show = iolatency_print_limit,
+	struct blkcg_gq *blkg = pd_to_blkg(pd);
+
+	/*
+	 * Groups throttled as collateral have min_lat_nsec == 0, so
+	 * iolatency_pd_offline() leaves their delay set.  Drop it here, where
+	 * no in-flight bio can re-arm it via check_scale_change().
+	 */
+	if (blkg)
+		blkcg_clear_delay(blkg);
 		.write = iolatency_set_limit,
 	},
 	{}

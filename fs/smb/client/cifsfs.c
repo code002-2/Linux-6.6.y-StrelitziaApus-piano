@@ -86,9 +86,6 @@ atomic_t sesInfoAllocCount;
 atomic_t tconInfoAllocCount;
 atomic_t tcpSesNextId;
 atomic_t tcpSesAllocCount;
-
-atomic_t tcpSocketReconnectCount;
-
 atomic_t tcpSesReconnectCount;
 atomic_t tconInfoReconnectCount;
 
@@ -404,6 +401,7 @@ cifs_alloc_inode(struct super_block *sb)
 		return NULL;
 	cifs_inode->cifsAttrs = 0x20;	/* default */
 	cifs_inode->time = 0;
+	cifs_inode->time_last_write = 0;
 	/*
 	 * Until the file is open and we have gotten oplock info back from the
 	 * server, can not assume caching of file data or metadata.
@@ -1839,7 +1837,6 @@ init_cifs(void)
 	int rc = 0;
 	cifs_proc_init();
 	INIT_LIST_HEAD(&cifs_tcp_ses_list);
-
 /*
  *  Initialize Global counters
  */
@@ -1848,11 +1845,6 @@ init_cifs(void)
 	atomic_set(&tcpSesNextId, 0);
 	atomic_set(&tcpSesAllocCount, 0);
 	atomic_set(&tcpSesReconnectCount, 0);
-
-	atomic_set(&tcpSocketReconnectCount, 0);
-
-	atomic_set(&EventCount, 0);
-
 	atomic_set(&tconInfoReconnectCount, 0);
 
 	atomic_set(&buf_alloc_count, 0);
@@ -2061,7 +2053,6 @@ exit_cifs(void)
 
 MODULE_AUTHOR("Steve French");
 MODULE_LICENSE("GPL");	/* combination of LGPL + GPL source behaves as GPL */
-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 MODULE_IMPORT_NS(ANDROID_GKI_VFS_EXPORT_ONLY);
 MODULE_DESCRIPTION
 	("VFS to access SMB3 servers e.g. Samba, Macs, Azure and Windows (and "

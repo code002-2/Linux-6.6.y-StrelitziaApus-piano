@@ -3741,10 +3741,19 @@ EXPORT_SYMBOL(skb_dequeue_tail);
 void skb_queue_purge_reason(struct sk_buff_head *list,
 			    enum skb_drop_reason reason)
 {
-	struct sk_buff *skb;
+	struct sk_buff_head tmp;
+	unsigned long flags;
 
-	while ((skb = skb_dequeue(list)) != NULL)
-		kfree_skb_reason(skb, reason);
+	if (skb_queue_empty_lockless(list))
+		return;
+
+	__skb_queue_head_init(&tmp);
+
+	spin_lock_irqsave(&list->lock, flags);
+	skb_queue_splice_init(list, &tmp);
+	spin_unlock_irqrestore(&list->lock, flags);
+
+	__skb_queue_purge_reason(&tmp, reason);
 }
 EXPORT_SYMBOL(skb_queue_purge_reason);
 
@@ -4811,7 +4820,8 @@ EXPORT_SYMBOL_GPL(skb_segment);
 #define SKB_EXT_CHUNKSIZEOF(x)	(ALIGN((sizeof(x)), SKB_EXT_ALIGN_VALUE) / SKB_EXT_ALIGN_VALUE)
 
 static const u8 skb_ext_type_len[] = {
-#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
+#if IS_ENABLED(CONFIG_BRIDGE_NETFILTER) && \
+	!IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
 	[SKB_EXT_BRIDGE_NF] = SKB_EXT_CHUNKSIZEOF(struct nf_bridge_info),
 #endif
 #ifdef CONFIG_XFRM
@@ -4833,6 +4843,10 @@ static __always_inline unsigned int skb_ext_total_length(void)
 	unsigned int l = SKB_EXT_CHUNKSIZEOF(struct skb_ext);
 	int i;
 
+	/* Private GKI slots stay ahead of every native extension. */
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
+	l += SKB_EXT_CHUNKSIZEOF(struct nf_bridge_info);
+#endif
 	for (i = 0; i < ARRAY_SIZE(skb_ext_type_len); i++)
 		l += skb_ext_type_len[i];
 
@@ -4842,6 +4856,11 @@ static __always_inline unsigned int skb_ext_total_length(void)
 static void skb_extensions_init(void)
 {
 	BUILD_BUG_ON(SKB_EXT_NUM >= 8);
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	BUILD_BUG_ON(SKB_EXT_SEC_PATH != 0);
+	BUILD_BUG_ON(SKB_EXT_NUM != 1);
+#endif
 #if !IS_ENABLED(CONFIG_KCOV_INSTRUMENT_ALL)
 	BUILD_BUG_ON(skb_ext_total_length() > 255);
 #endif
@@ -5183,6 +5202,9 @@ struct sk_buff *sock_dequeue_err_skb(struct sock *sk)
 	struct sk_buff *skb, *skb_next = NULL;
 	bool icmp_next = false;
 	unsigned long flags;
+
+	if (skb_queue_empty_lockless(q))
+		return NULL;
 
 	spin_lock_irqsave(&q->lock, flags);
 	skb = __skb_dequeue(q);
@@ -6672,6 +6694,33 @@ static void *skb_ext_get_ptr(struct skb_ext *ext, enum skb_ext_id id)
 	return (void *)ext + (ext->offset[id] * SKB_EXT_ALIGN_VALUE);
 }
 
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+static __always_inline bool skb_ext_kmi_private(enum skb_ext_id id)
+{
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
+	if (id == SKB_EXT_BRIDGE_NF)
+		return true;
+#endif
+#if IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	if (id == SKB_EXT_SCTP_CSUM)
+		return true;
+#endif
+	return false;
+}
+
+static __always_inline unsigned int skb_ext_private_first_chunks(void)
+{
+	unsigned int chunks = SKB_EXT_CHUNKSIZEOF(struct skb_ext);
+
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT)
+	chunks +=
+		SKB_EXT_CHUNKSIZEOF(struct nf_bridge_info);
+#endif
+	return chunks;
+}
+#endif
+
 /**
  * __skb_ext_alloc - allocate a new skb extensions storage
  *
@@ -6745,6 +6794,17 @@ void *__skb_ext_set(struct sk_buff *skb, enum skb_ext_id id,
 	unsigned int newlen, newoff = SKB_EXT_CHUNKSIZEOF(*ext);
 
 	skb_ext_put(skb);
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	if (skb_ext_kmi_private(id)) {
+		ext->chunks = skb_ext_private_first_chunks();
+		skb->extensions = ext;
+		skb->active_extensions = 1 << id;
+		return ext->data;
+	}
+
+	newoff = skb_ext_private_first_chunks();
+#endif
 	newlen = newoff + skb_ext_type_len[id];
 	ext->chunks = newlen;
 	ext->offset[id] = newoff;
@@ -6772,6 +6832,35 @@ void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id)
 	struct skb_ext *new, *old = NULL;
 	unsigned int newlen, newoff;
 
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	if (skb_ext_kmi_private(id)) {
+		if (skb->active_extensions) {
+			old = skb->extensions;
+			new = skb_ext_maybe_cow(old, skb->active_extensions);
+			if (!new)
+				return NULL;
+
+			if (skb_ext_exist(skb, id))
+				goto set_private_active;
+		} else {
+			new = __skb_ext_alloc(GFP_ATOMIC);
+			if (!new)
+				return NULL;
+			new->chunks = skb_ext_private_first_chunks();
+			goto set_private_active;
+		}
+
+		if (new->chunks < skb_ext_private_first_chunks())
+			new->chunks = skb_ext_private_first_chunks();
+set_private_active:
+		skb->slow_gro = 1;
+		skb->extensions = new;
+		skb->active_extensions |= 1 << id;
+		return new->data;
+	}
+#endif
+
 	if (skb->active_extensions) {
 		old = skb->extensions;
 
@@ -6785,6 +6874,11 @@ void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id)
 		newoff = new->chunks;
 	} else {
 		newoff = SKB_EXT_CHUNKSIZEOF(*new);
+
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+		IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+		newoff = skb_ext_private_first_chunks();
+#endif
 
 		new = __skb_ext_alloc(GFP_ATOMIC);
 		if (!new)
@@ -6823,6 +6917,18 @@ static void skb_ext_put_mctp(struct mctp_flow *flow)
 void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id)
 {
 	struct skb_ext *ext = skb->extensions;
+
+#if IS_ENABLED(CONFIG_ANDROID_BRIDGE_NETFILTER_KMI_EXT) || \
+	IS_ENABLED(CONFIG_ANDROID_SCTP_KMI_EXT)
+	if (skb_ext_kmi_private(id)) {
+		skb->active_extensions &= ~(1 << id);
+		if (skb->active_extensions == 0) {
+			skb->extensions = NULL;
+			__skb_ext_put(ext);
+		}
+		return;
+	}
+#endif
 
 	skb->active_extensions &= ~(1 << id);
 	if (skb->active_extensions == 0) {
@@ -6914,7 +7020,8 @@ nodefer:	__kfree_skb(skb);
 }
 
 static void skb_splice_csum_page(struct sk_buff *skb, struct page *page,
-				 size_t offset, size_t len)
+				 size_t offset, size_t len,
+				 unsigned int csum_offset)
 {
 	const char *kaddr;
 	__wsum csum;
@@ -6922,7 +7029,7 @@ static void skb_splice_csum_page(struct sk_buff *skb, struct page *page,
 	kaddr = kmap_local_page(page);
 	csum = csum_partial(kaddr + offset, len, 0);
 	kunmap_local(kaddr);
-	skb->csum = csum_block_add(skb->csum, csum, skb->len);
+	skb->csum = csum_block_add(skb->csum, csum, csum_offset);
 }
 
 /**
@@ -6983,7 +7090,8 @@ ssize_t skb_splice_from_iter(struct sk_buff *skb, struct iov_iter *iter,
 			}
 
 			if (skb->ip_summed == CHECKSUM_NONE)
-				skb_splice_csum_page(skb, page, off, part);
+				skb_splice_csum_page(skb, page, off, part,
+						     skb->len + spliced);
 
 			off = 0;
 			spliced += part;

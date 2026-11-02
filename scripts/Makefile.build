@@ -286,7 +286,17 @@ rust_common_cmd = \
 # would not match each other.
 
 quiet_cmd_rustc_o_rs = $(RUSTC_OR_CLIPPY_QUIET) $(quiet_modtag) $@
-      cmd_rustc_o_rs = $(rust_common_cmd) --emit=obj=$@ $<
+      cmd_rustc_o_rs = $(rust_common_cmd) --emit=obj=$@ $< && $(cmd_rust_short_alias)
+
+# Rust exports whose mangled name is too long for the MODVERSIONS name field
+# are also exported under a short alias; rewrite the references in the module
+# object so both sides agree on the name.
+rust_short_alias_map := $(objtree)/rust/rust-sym-short.map
+cmd_rust_short_alias = \
+	if [ -f $(rust_short_alias_map) ]; then \
+		args=$$(awk '{ printf "--redefine-sym %s=%s ", $$1, $$2 }' $(rust_short_alias_map)); \
+		if [ -n "$$args" ]; then $(OBJCOPY) $$args $@; fi; \
+	fi
 
 $(obj)/%.o: $(src)/%.rs FORCE
 	$(call if_changed_dep,rustc_o_rs)

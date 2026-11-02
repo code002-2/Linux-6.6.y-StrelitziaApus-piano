@@ -289,6 +289,7 @@ struct fuse_file {
 	/** Entry on inode's write_files list */
 	struct list_head write_entry;
 
+	bool is_pinned:1;
 	/* Readdir related */
 	struct {
 		/*

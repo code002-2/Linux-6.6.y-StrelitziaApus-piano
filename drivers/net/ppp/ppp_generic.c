@@ -1905,7 +1905,7 @@ ppp_push(struct ppp *ppp)
 
 		spin_lock(&pch->downl);
 		chan = pch->chan;
-		if (unlikely(!chan || (!chan->direct_xmit && skb_linearize(skb)))) {
+		if (unlikely(!chan || skb_linearize(skb))) {
 			/* channel got unregistered, or it requires a linear
 			 * skb but linearization failed
 			 */
@@ -3520,10 +3520,7 @@ ppp_connect_channel(struct channel *pch, int unit)
 		ret = -ENOTCONN;
 		goto outl;
 	}
-	if (pch->chan->direct_xmit)
-		ppp->dev->priv_flags |= IFF_NO_QUEUE;
-	else
-		ppp->dev->priv_flags &= ~IFF_NO_QUEUE;
+	ppp->dev->priv_flags &= ~IFF_NO_QUEUE;
 	spin_unlock_bh(&pch->downl);
 	if (pch->file.hdrlen > ppp->file.hdrlen)
 		ppp->file.hdrlen = pch->file.hdrlen;

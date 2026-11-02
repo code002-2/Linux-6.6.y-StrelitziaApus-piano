@@ -60,16 +60,10 @@ endif
 core-cfgs = \
     --cfg no_fp_fmt_parse
 
-alloc-cfgs = \
-    --cfg no_borrow \
-    --cfg no_fmt \
-    --cfg no_global_oom_handling \
-    --cfg no_macros \
-    --cfg no_rc \
-    --cfg no_str \
-    --cfg no_string \
-    --cfg no_sync \
-    --cfg no_thin
+# StrelitziaApus: build `alloc` from the toolchain's rust-src instead of the
+# vendored subset, so a newer rustc can be used. The `no_*` cfgs only make
+# sense for the in-tree copy.
+alloc-cfgs =
 
 quiet_cmd_rustdoc = RUSTDOC $(if $(rustdoc_host),H, ) $<
       cmd_rustdoc = \
@@ -335,13 +329,13 @@ quiet_cmd_bindgen = BINDGEN $@
 		$(bindgen_target_cflags) $(bindgen_target_extra)
 
 $(obj)/bindings/bindings_generated.rs: private bindgen_target_flags = \
-    $(shell grep -v '^#\|^$$' $(srctree)/$(src)/bindgen_parameters)
+    $(shell sed -e 's/\#.*//' -e '/^[[:space:]]*$$/d' $(srctree)/$(src)/bindgen_parameters)
 $(obj)/bindings/bindings_generated.rs: $(src)/bindings/bindings_helper.h \
     $(src)/bindgen_parameters FORCE
 	$(call if_changed_dep,bindgen)
 
 $(obj)/uapi/uapi_generated.rs: private bindgen_target_flags = \
-    $(shell grep -v '^#\|^$$' $(srctree)/$(src)/bindgen_parameters)
+    $(shell sed -e 's/\#.*//' -e '/^[[:space:]]*$$/d' $(srctree)/$(src)/bindgen_parameters)
 $(obj)/uapi/uapi_generated.rs: $(src)/uapi/uapi_helper.h \
     $(src)/bindgen_parameters FORCE
 	$(call if_changed_dep,bindgen)
@@ -365,6 +359,32 @@ quiet_cmd_exports = EXPORTS $@
 	$(NM) -p --defined-only $< \
 		| awk '/ (T|R|D|B) / {printf "EXPORT_SYMBOL_RUST_GPL(%s);\n",$$3}' > $@
 
+# MODVERSIONS stores imported symbol names in a fixed 56-byte field, and Rust
+# v0 mangled names are longer than that for most `kernel` crate items. Rename
+# every export that does not fit to a short alias, in this object and in the
+# objects of the modules that reference it (see scripts/Makefile.build), so
+# that both sides agree on a name that fits.
+rust_short_alias_limit := 56
+
+quiet_cmd_exports_kernel = EXPORTS $@
+      cmd_exports_kernel = \
+	$(NM) -p --defined-only $(obj)/kernel.o \
+		| awk '/ (T|R|D|B) / {print $$3}' > $(obj)/.kernel-syms; \
+	awk -v lim=$(rust_short_alias_limit) \
+		'length($$0) >= lim { printf "%s krs_%d\n", $$0, n++ }' \
+		$(obj)/.kernel-syms > $(obj)/rust-sym-short.map.new; \
+	if [ -s $(obj)/rust-sym-short.map.new ] || [ ! -f $(obj)/rust-sym-short.map ]; then \
+		mv -f $(obj)/rust-sym-short.map.new $(obj)/rust-sym-short.map; \
+	fi; \
+	args=$$(awk '{ printf "--redefine-sym %s=%s ", $$1, $$2 }' \
+		$(obj)/rust-sym-short.map); \
+	if [ -n "$$args" ]; then $(OBJCOPY) $$args $(obj)/kernel.o; fi; \
+	awk -v lim=$(rust_short_alias_limit) \
+		'{ if (length($$1) >= lim) \
+			printf "EXPORT_SYMBOL_RUST_GPL(krs_%d);\n", n++; \
+		 else printf "EXPORT_SYMBOL_RUST_GPL(%s);\n", $$1 }' \
+		$(obj)/.kernel-syms > $@
+
 $(obj)/exports_core_generated.h: $(obj)/core.o FORCE
 	$(call if_changed,exports)
 
@@ -375,11 +395,11 @@ $(obj)/exports_bindings_generated.h: $(obj)/bindings.o FORCE
 	$(call if_changed,exports)
 
 $(obj)/exports_kernel_generated.h: $(obj)/kernel.o FORCE
-	$(call if_changed,exports)
+	$(call if_changed,exports_kernel)
 
 quiet_cmd_rustc_procmacro = $(RUSTC_OR_CLIPPY_QUIET) P $@
       cmd_rustc_procmacro = \
-	$(RUSTC_OR_CLIPPY) $(rust_common_flags) \
+	$(RUSTC_OR_CLIPPY) $(rust_common_flags) -Clinker=clang \
 		--emit=dep-info=$(depfile) --emit=link=$@ --extern proc_macro \
 		--crate-type proc-macro \
 		--crate-name $(patsubst lib%.so,%,$(notdir $@)) $<
@@ -425,7 +445,10 @@ $(obj)/core.o: private skip_clippy = 1
 $(obj)/core.o: private skip_flags = -Dunreachable_pub
 $(obj)/core.o: private rustc_objcopy = $(foreach sym,$(redirect-intrinsics),--redefine-sym $(sym)=__rust$(sym))
 $(obj)/core.o: private rustc_target_flags = $(core-cfgs)
-$(obj)/core.o: $(RUST_LIB_SRC)/core/src/lib.rs scripts/target.json FORCE
+$(obj)/core.o: $(RUST_LIB_SRC)/core/src/lib.rs FORCE
+ifneq ($(or $(CONFIG_X86_64),$(CONFIG_X86_32)),)
+$(obj)/core.o: scripts/target.json
+endif
 	$(call if_changed_dep,rustc_library)
 
 $(obj)/compiler_builtins.o: private rustc_objcopy = -w -W '__*'
@@ -435,7 +458,7 @@ $(obj)/compiler_builtins.o: $(src)/compiler_builtins.rs $(obj)/core.o FORCE
 $(obj)/alloc.o: private skip_clippy = 1
 $(obj)/alloc.o: private skip_flags = -Dunreachable_pub
 $(obj)/alloc.o: private rustc_target_flags = $(alloc-cfgs)
-$(obj)/alloc.o: $(src)/alloc/lib.rs $(obj)/compiler_builtins.o FORCE
+$(obj)/alloc.o: $(RUST_LIB_SRC)/alloc/src/lib.rs $(obj)/compiler_builtins.o FORCE
 	$(call if_changed_dep,rustc_library)
 
 $(obj)/build_error.o: $(src)/build_error.rs $(obj)/compiler_builtins.o FORCE
