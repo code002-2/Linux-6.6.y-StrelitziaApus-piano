@@ -560,6 +560,7 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 
 	cred = prepare_creds();
 	if (!cred)
+		fput(pidfs_file);
 		goto fail;
 	/*
 	 * We cannot trust fsuid as being the "true" uid of the process
