@@ -25,6 +25,7 @@
 #define TM_LAST_TEMP_BIT_MASK		0xFFF
 
 #define MAX_SENSORS 16
+#define MAX_READ_RETRY 3
 
 #include <linux/interrupt.h>
 #include <linux/thermal.h>
