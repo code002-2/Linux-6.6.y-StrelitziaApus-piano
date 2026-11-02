@@ -990,6 +990,27 @@ static void __exit v4l2_async_exit(void)
 subsys_initcall(v4l2_async_init);
 module_exit(v4l2_async_exit);
 
+/*
+ * StrelitziaApus: the kernel.org tree turned these two entry points into
+ * macros that expand to __v4l2_async_register_subdev*(). The GKI KMI still
+ * lists v4l2_async_register_subdev() and v4l2_async_register_subdev_sensor()
+ * as exported symbols and the prebuilt camera modules call them, so keep the
+ * real functions and export them alongside the macros.
+ */
+#undef v4l2_async_register_subdev
+int v4l2_async_register_subdev(struct v4l2_subdev *sd)
+{
+	return __v4l2_async_register_subdev(sd, THIS_MODULE);
+}
+EXPORT_SYMBOL(v4l2_async_register_subdev);
+
+#undef v4l2_async_register_subdev_sensor
+int v4l2_async_register_subdev_sensor(struct v4l2_subdev *sd)
+{
+	return __v4l2_async_register_subdev_sensor(sd, THIS_MODULE);
+}
+EXPORT_SYMBOL(v4l2_async_register_subdev_sensor);
+
 MODULE_AUTHOR("Guennadi Liakhovetski <g.liakhovetski@gmx.de>");
 MODULE_AUTHOR("Sakari Ailus <sakari.ailus@linux.intel.com>");
 MODULE_AUTHOR("Ezequiel Garcia <ezequiel@collabora.com>");
