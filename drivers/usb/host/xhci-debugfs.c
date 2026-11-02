@@ -349,7 +349,7 @@ static int xhci_portsc_show(struct seq_file *s, void *unused)
 	u32			portsc;
 	char			str[XHCI_MSG_MAX];
 
-	portsc = xhci_portsc_readl(port);
+	portsc = readl(port->addr);
 	seq_printf(s, "%s\n", xhci_decode_portsc(str, portsc));
 
 	return 0;
@@ -379,7 +379,7 @@ static ssize_t xhci_port_write(struct file *file,  const char __user *ubuf,
 			return count;
 		spin_lock_irqsave(&xhci->lock, flags);
 		/* compliance mode can only be enabled on ports in RxDetect */
-		portsc = xhci_portsc_readl(port);
+		portsc = readl(port->addr);
 		if ((portsc & PORT_PLS_MASK) != XDEV_RXDETECT) {
 			spin_unlock_irqrestore(&xhci->lock, flags);
 			return -EPERM;
@@ -387,7 +387,7 @@ static ssize_t xhci_port_write(struct file *file,  const char __user *ubuf,
 		portsc = xhci_port_state_to_neutral(portsc);
 		portsc &= ~PORT_PLS_MASK;
 		portsc |= PORT_LINK_STROBE | XDEV_COMP_MODE;
-		xhci_portsc_writel(port, portsc);
+		writel(portsc, port->addr);
 		spin_unlock_irqrestore(&xhci->lock, flags);
 	} else {
 		return -EINVAL;
@@ -632,16 +632,20 @@ void xhci_debugfs_remove_slot(struct xhci_hcd *xhci, int slot_id)
 static void xhci_debugfs_create_ports(struct xhci_hcd *xhci,
 				      struct dentry *parent)
 {
+	unsigned int		num_ports;
 	char			port_name[8];
 	struct xhci_port	*port;
 	struct dentry		*dir;
 
+	num_ports = HCS_MAX_PORTS(xhci->hcs_params1);
+
 	parent = debugfs_create_dir("ports", parent);
 
-	for (int i = 0; i < xhci->max_ports; i++) {
-		scnprintf(port_name, sizeof(port_name), "port%02d", i + 1);
+	while (num_ports--) {
+		scnprintf(port_name, sizeof(port_name), "port%02d",
+			  num_ports + 1);
 		dir = debugfs_create_dir(port_name, parent);
-		port = &xhci->hw_ports[i];
+		port = &xhci->hw_ports[num_ports];
 		debugfs_create_file("portsc", 0644, dir, port, &port_fops);
 	}
 }

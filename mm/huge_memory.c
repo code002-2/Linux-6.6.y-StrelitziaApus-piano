@@ -2646,7 +2646,6 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 		entry = pmd_to_swp_entry(old_pmd);
 		page = pfn_swap_entry_to_page(entry);
 		write = is_writable_migration_entry(entry);
-	struct mem_cgroup *memcg, *old_memcg;
 		if (PageAnon(page))
 			anon_exclusive = is_readable_exclusive_migration_entry(entry);
 		young = is_migration_entry_young(entry);
@@ -4197,13 +4196,6 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct page *new)
 	if (folio_test_dirty(folio) && is_migration_entry_dirty(entry))
 		pmde = pmd_mkdirty(pmde);
 
-	/*
-	 * switch to folio's memcg as xarray node allocation can happen and
-	 * needs to charge to it.
-	 */
-	memcg = folio_memcg(folio);
-	old_memcg = set_active_memcg(memcg);
-
 	if (folio_test_anon(folio)) {
 		rmap_t rmap_flags = RMAP_NONE;
 
@@ -4222,5 +4214,3 @@ void remove_migration_pmd(struct page_vma_mapped_walk *pvmw, struct page *new)
 	trace_remove_migration_pmd(address, pmd_val(pmde));
 }
 #endif
-	/* restore to caller's old_memcg */
-	set_active_memcg(old_memcg);

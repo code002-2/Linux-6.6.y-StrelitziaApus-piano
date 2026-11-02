@@ -5,7 +5,6 @@
 #include <linux/android_kabi.h>
 
 struct netns_nftables {
-	unsigned int		base_seq;
 	u8			gencursor;
 	ANDROID_KABI_RESERVE(1);
 };
