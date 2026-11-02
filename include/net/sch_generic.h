@@ -332,6 +332,7 @@ struct Qdisc_ops {
 	ANDROID_KABI_RESERVE(1);
 };
 
+
 struct tcf_result {
 	union {
 		struct {
@@ -339,8 +340,8 @@ struct tcf_result {
 			u32		classid;
 		};
 		const struct tcf_proto *goto_tp;
+
 	};
-	enum skb_drop_reason		drop_reason;
 };
 
 struct tcf_chain;
