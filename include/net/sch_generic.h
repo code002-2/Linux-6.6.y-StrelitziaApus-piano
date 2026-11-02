@@ -101,7 +101,6 @@ struct Qdisc {
 	struct hlist_node       hash;
 	u32			handle;
 	u32			parent;
-	int			depth;
 
 	struct netdev_queue	*dev_queue;
 
@@ -333,7 +332,6 @@ struct Qdisc_ops {
 	ANDROID_KABI_RESERVE(1);
 };
 
-
 struct tcf_result {
 	union {
 		struct {
@@ -341,8 +339,8 @@ struct tcf_result {
 			u32		classid;
 		};
 		const struct tcf_proto *goto_tp;
-
 	};
+	enum skb_drop_reason		drop_reason;
 };
 
 struct tcf_chain;
@@ -437,8 +435,6 @@ struct tcf_proto {
 	 */
 	spinlock_t		lock;
 	bool			deleting;
-	bool			counted;
-	bool			usesw;
 	refcount_t		refcnt;
 	struct rcu_head		rcu;
 	struct hlist_node	destroy_ht_node;
@@ -487,7 +483,6 @@ struct tcf_block {
 	struct flow_block flow_block;
 	struct list_head owner_list;
 	bool keep_dst;
-	atomic_t useswcnt;
 	atomic_t offloadcnt; /* Number of oddloaded filters */
 	unsigned int nooffloaddevcnt; /* Number of devs unable to do offload */
 	unsigned int lockeddevcnt; /* Number of devs that require rtnl lock. */

@@ -390,7 +390,6 @@ static struct tcf_proto *tcf_proto_create(const char *kind, u32 protocol,
 	tp->protocol = protocol;
 	tp->prio = prio;
 	tp->chain = chain;
-	tp->usesw = !tp->ops->reoffload;
 	spin_lock_init(&tp->lock);
 	refcount_set(&tp->refcnt, 1);
 
@@ -411,55 +410,12 @@ static void tcf_proto_get(struct tcf_proto *tp)
 	refcount_inc(&tp->refcnt);
 }
 
-static void tcf_proto_count_usesw(struct tcf_proto *tp, bool add)
-{
-#ifdef CONFIG_NET_CLS_ACT
-	struct tcf_block *block = tp->chain->block;
-	bool counted = false;
-
-	if (!add) {
-		if (tp->usesw && tp->counted) {
-			if (!atomic_dec_return(&block->useswcnt))
-				static_branch_dec(&tcf_sw_enabled_key);
-			tp->counted = false;
-		}
-		return;
-	}
-
-	spin_lock(&tp->lock);
-	if (tp->usesw && !tp->counted) {
-		counted = true;
-		tp->counted = true;
-	}
-	spin_unlock(&tp->lock);
-
-	if (counted && atomic_inc_return(&block->useswcnt) == 1)
-		static_branch_inc(&tcf_sw_enabled_key);
-#endif
-}
-
 static void tcf_chain_put(struct tcf_chain *chain);
 
 static void tcf_proto_destroy(struct tcf_proto *tp, bool rtnl_held,
 			      bool sig_destroy, struct netlink_ext_ack *extack)
 {
-	/* A locked classifier's destroy callback (e.g. u32_destroy) uses
-	 * rtnl_dereference() and mutates shared structures (e.g. the
-	 * tc_u_common hash list) that are only safe under rtnl_lock. When an
-	 * unlocked classifier's request (e.g. flower on ingress) loses the
-	 * tcf_chain_tp_insert_unique() race and ends up dropping the last
-	 * reference on a locked classifier's proto, destroy() would run
-	 * without rtnl held. Take it here in that case.
-	 */
-	bool not_lockless = !rtnl_held &&
-		!(tp->ops->flags & TCF_PROTO_OPS_DOIT_UNLOCKED);
-
-	if (not_lockless)
-		rtnl_lock();
-	tp->ops->destroy(tp, rtnl_held || not_lockless, extack);
-	if (not_lockless)
-		rtnl_unlock();
-	tcf_proto_count_usesw(tp, false);
+	tp->ops->destroy(tp, rtnl_held, extack);
 	if (sig_destroy)
 		tcf_proto_signal_destroyed(tp->chain, tp);
 	tcf_chain_put(tp->chain);
@@ -1708,6 +1664,7 @@ static inline int __tcf_classify(struct sk_buff *skb,
 				 int act_index,
 				 u32 *last_executed_chain)
 {
+	u32 orig_reason = res->drop_reason;
 #ifdef CONFIG_NET_CLS_ACT
 	const int max_reclassify_loop = 16;
 	const struct tcf_proto *first_tp;
@@ -1758,8 +1715,14 @@ reclassify:
 			goto reset;
 		}
 #endif
-		if (err >= 0)
+		if (err >= 0) {
+			/* Policy drop or drop reason is over-written by
+			 * classifiers with a bogus value(0) */
+			if (err == TC_ACT_SHOT &&
+			    res->drop_reason == SKB_NOT_DROPPED_YET)
+				tcf_set_drop_reason(res, orig_reason);
 			return err;
+		}
 	}
 
 	if (unlikely(n))
@@ -2401,7 +2364,6 @@ replay:
 		tfilter_notify(net, skb, n, tp, block, q, parent, fh,
 			       RTM_NEWTFILTER, false, rtnl_held, extack);
 		tfilter_put(tp, fh);
-		tcf_proto_count_usesw(tp, true);
 		/* q pointer is NULL for shared blocks */
 		if (q)
 			q->flags &= ~TCQ_F_CAN_BYPASS;
