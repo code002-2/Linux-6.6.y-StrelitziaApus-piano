@@ -1389,6 +1389,8 @@ out:
 
 	if (read_seqcount_retry(&net->xfrm.xfrm_state_hash_generation, sequence)) {
 		*err = -EAGAIN;
+	xfrm_hash_ptrs_get(net, &state_ptrs);
+
 		if (x) {
 			xfrm_state_put(x);
 			x = NULL;
@@ -2009,8 +2011,6 @@ xfrm_state_lookup(struct net *net, u32 mark, const xfrm_address_t *daddr, __be32
 	struct xfrm_state *x;
 
 	rcu_read_lock();
-	xfrm_hash_ptrs_get(net, &state_ptrs);
-
 	x = __xfrm_state_lookup(&state_ptrs, mark, daddr, spi, proto, family);
 	rcu_read_unlock();
 	return x;
