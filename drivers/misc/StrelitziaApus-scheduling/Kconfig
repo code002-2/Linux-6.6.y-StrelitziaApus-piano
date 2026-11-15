@@ -5,11 +5,4 @@ config STRELITZIA_SCHEDULING
 	depends on CPUSETS
 	default y
 	help
-	  内建默认规则表的内核态线程亲和性调度器：按 (uid, comm, 场景) 把线程
-	  绑定到指定 CPU 簇，并用 uclamp 拉频。规则、类别、场景全部编译进内核，
-	  不依赖任何用户态模块。
-
-	  只用 GKI 已导出的 vendor hook、set_cpus_allowed_ptr() 与
-	  sched_setattr_nocheck()，不新增导出符号，不改变 ABI。
-
-	  运行时通过 debugfs 控制：/sys/kernel/debug/strelitzia_scheduling/
+	  内建默认规则表的内核态线程亲和性调度器（亲和性 + uclamp 拉频）。

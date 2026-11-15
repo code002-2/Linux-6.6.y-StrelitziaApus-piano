@@ -78,7 +78,8 @@ static inline unsigned int uclamp_eff_value(struct task_struct *p,
 #define SA_COMM_LEN	TASK_COMM_LEN
 #define SA_MASK_BUF	96
 #define SA_WQ_MAX	1024
-#define SA_BOOT_SWEEP_MS 2000		/* 开机后延时扫一次 */
+#define SA_ARM_MS 8000			/* 开机后多久开始接管 */
+#define SA_RESWEEP_MS 15000		/* 定时重扫间隔 */
 
 /* 场景位 */
 enum sa_scene {
@@ -166,7 +167,7 @@ static struct workqueue_struct *sa_wq;
 static atomic_t		 sa_pending_cnt = ATOMIC_INIT(0);
 static unsigned int	 sa_scene_cur = SA_SCENE_IDLE;
 static bool		 sa_uclamp_on = true;
-static DEFINE_PER_CPU(int, sa_in_hook);	/* 纠偏钩子重入保护 */
+static bool		 sa_armed;		/* 延时武装，避开开机早期 */
 
 static struct dentry	*sa_debugfs;
 
@@ -464,15 +465,44 @@ static void sa_sweep_work(struct work_struct *w)
 		sa_scene_cur);
 }
 
+
 static DECLARE_WORK(sa_sweep, sa_sweep_work);
 
-/* 开机后延时扫一次，兜住 init 到钩子生效之间新建的线程 */
-static void sa_boot_sweep_work(struct work_struct *w)
+/*
+ * 定时重扫：替代原来挂在调度器临界区的两个纠偏钩子。
+ * cpuset / 厂商调度可能在我们之后放宽掩码，这里每隔一段时间把命中规则的
+ * 线程重新对齐一次。全程只走工作队列，不碰 rq 锁。
+ */
+static void sa_periodic_work(struct work_struct *w);
+
+static DECLARE_DELAYED_WORK(sa_periodic, sa_periodic_work);
+
+static void sa_periodic_work(struct work_struct *w)
 {
 	queue_work(sa_wq, &sa_sweep);
+	schedule_delayed_work(&sa_periodic, msecs_to_jiffies(SA_RESWEEP_MS));
 }
 
-static DECLARE_DELAYED_WORK(sa_boot_sweep, sa_boot_sweep_work);
+/*
+ * 开机早期（init、zygote、system_server 起来之前）系统非常敏感，
+ * 那时候去改亲和性/uclamp 容易出问题。延时到 T+8s 再开始工作，
+ * 期间新建的线程由随后的全量扫描补齐。
+ */
+static void sa_arm_work(struct work_struct *w)
+{
+	sa_armed = true;
+	if (sa_tab.nr)
+		static_branch_enable(&sa_active);
+	pr_info("armed at T+%ums (%u rules)\n", SA_ARM_MS, sa_tab.nr);
+	queue_work(sa_wq, &sa_sweep);
+	schedule_delayed_work(&sa_periodic, msecs_to_jiffies(SA_RESWEEP_MS));
+}
+
+static DECLARE_DELAYED_WORK(sa_arm, sa_arm_work);
+
+
+
+
 
 /*
  * 还原：把当前规则覆盖到的线程全部放回 cpu_present_mask。
@@ -581,40 +611,6 @@ static void sa_on_set_task_comm(void *data, struct task_struct *p, bool exec)
  * 命中规则的线程被改走时拉回来。
  * 自己调用 set_cpus_allowed_ptr() 会再次触发本钩子，用 per-cpu 标志防重入。
  */
-static void sa_on_setaffinity(void *data, struct task_struct *p,
-			      const struct cpumask *in_mask, int *retval)
-{
-	const struct sa_rule *r = NULL;
-	cpumask_var_t mask;
-	int cpu;
-
-	if (!static_branch_unlikely(&sa_active))
-		return;
-	if (sa_skip(p))
-		return;
-	if (retval && *retval)
-		return;
-	if (this_cpu_read(sa_in_hook))
-		return;
-
-	if (!alloc_cpumask_var(&mask, GFP_ATOMIC))
-		return;
-
-	spin_lock(&sa_lock);
-	r = sa_lookup(sa_uid_of(p), p->comm);
-	if (r)
-		cpumask_copy(mask, r->mask);
-	spin_unlock(&sa_lock);
-
-	if (r && !cpumask_equal(in_mask, mask)) {
-		cpu = get_cpu();
-		this_cpu_write(sa_in_hook, 1);
-		set_cpus_allowed_ptr(p, mask);
-		this_cpu_write(sa_in_hook, 0);
-		put_cpu();
-	}
-	free_cpumask_var(mask);
-}
 
 
 /*
@@ -623,28 +619,6 @@ static void sa_on_setaffinity(void *data, struct task_struct *p,
  * 说明我们被"放宽"了（比如 cpuset 把 6,7 改回 0-7），拉回去；
  * 如果新掩码里根本没有我们的目标（进了受限 cpuset），就不强求。
  */
-static void sa_on_set_cpus_allowed(void *data, const struct cpumask *cpu_valid_mask,
-				   const struct cpumask *new_mask,
-				   struct task_struct *p, unsigned int *dest_cpu)
-{
-	const struct sa_rule *r;
-
-	if (!static_branch_unlikely(&sa_active))
-		return;
-	if (sa_skip(p))
-		return;
-	if (this_cpu_read(sa_in_hook))
-		return;
-	if (!new_mask)
-		return;
-
-	spin_lock(&sa_lock);
-	r = sa_lookup(sa_uid_of(p), p->comm);
-	if (r && cpumask_subset(r->mask, new_mask) &&
-	    !cpumask_subset(new_mask, r->mask))
-		sa_queue_apply(p, r->mask, sa_uclamp_on ? r->uclamp_min : 0);
-	spin_unlock(&sa_lock);
-}
 
 /* ------------------------------------------------------------- 解析装载 */
 
@@ -787,9 +761,9 @@ static int sa_load_table(char *text)
 	sa_tab = new;
 	spin_unlock(&sa_lock);
 
-	if (sa_tab.nr)
+	if (sa_tab.nr && sa_armed)
 		static_branch_enable(&sa_active);
-	else
+	else if (!sa_tab.nr)
 		static_branch_disable(&sa_active);
 
 	pr_info("table loaded: %u rule(s), %u class(es)\n",
@@ -1043,6 +1017,7 @@ static ssize_t sa_enable_write(struct file *file, const char __user *ubuf,
 		static_branch_disable(&sa_active);
 		pr_info("disabled by user\n");
 	} else {
+		sa_armed = true;
 		if (sa_tab.nr)
 			static_branch_enable(&sa_active);
 		queue_work(sa_wq, &sa_sweep);
@@ -1137,18 +1112,12 @@ static int __init sa_init(void)
 		goto err;
 	}
 
-	ret = register_trace_android_rvh_set_cpus_allowed_by_task(
-		sa_on_set_cpus_allowed, NULL);
-	if (ret)
-		pr_warn("register set_cpus_allowed_by_task failed: %d\n", ret);
-
-	ret = register_trace_android_rvh_sched_setaffinity(sa_on_setaffinity, NULL);
 	if (ret) {
 		pr_warn("register sched_setaffinity failed: %d (纠偏关闭)\n", ret);
 		ret = 0;
 	}
 
-	schedule_delayed_work(&sa_boot_sweep, msecs_to_jiffies(SA_BOOT_SWEEP_MS));
+	schedule_delayed_work(&sa_arm, msecs_to_jiffies(SA_ARM_MS));
 
 	pr_info("ready (v5: builtin rules, %u entries)\n", sa_tab.nr);
 	return 0;
