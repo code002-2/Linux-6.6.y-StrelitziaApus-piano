@@ -609,3 +609,4 @@ source "drivers/misc/uacce/Kconfig"
 source "drivers/misc/pvpanic/Kconfig"
 source "drivers/misc/mchp_pci1xxxx/Kconfig"
 endmenu
+source "drivers/misc/StrelitziaApus-scheduling/Kconfig"

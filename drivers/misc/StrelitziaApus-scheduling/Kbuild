@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# StrelitziaApus-scheduling
+#
+# 树内构建（推荐）：
+#   把本目录放进 common/drivers/misc/，并在 drivers/misc/Makefile 里加
+#       obj-$(CONFIG_STRELITZIA_SCHEDULING) += StrelitziaApus-scheduling/
+#   本文件的写法（由上层决定是否进入本目录）：
+#       obj-$(CONFIG_STRELITZIA_SCHEDULING) += strelitzia_scheduling.o
+#
+# 树外构建（调试用）：
+#   把下面一行换成  obj-m += strelitzia_scheduling.o
+#   然后 make -C <kernel-src> M=$PWD ARCH=arm64 LLVM=1 LLVM_IAS=1 modules
+#
+# 注意：如果树内写成 obj-m，Kleaf 会认为产出了模块并触发 module_outs 校验，
+#      即便 CONFIG_STRELITZIA_SCHEDULING=y 也一样 —— 这里必须是 obj-$(CONFIG_...)。
+
+obj-$(CONFIG_STRELITZIA_SCHEDULING) += strelitzia_scheduling.o

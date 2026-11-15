@@ -161,3 +161,6 @@ CONFIG_RUST_MODVERSIONS=y
 
 # cgroup 匹配器原本没有启用，启用后才能够编译并验证 Rust 版本
 CONFIG_NETFILTER_XT_MATCH_CGROUP=y
+
+# StrelitziaApus-scheduling：内建线程亲和性调度器
+CONFIG_STRELITZIA_SCHEDULING=y
