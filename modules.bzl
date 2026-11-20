@@ -132,6 +132,12 @@ _X86_64_GKI_MODULES_LIST = [
 ]
 
 # buildifier: disable=unnamed-macro
+# Extra modules StrelitziaApus ships on top of the GKI list.
+_STRELITZIA_EXTRA_MODULES = [
+    "fs/ntfs/ntfs.ko",
+    "fs/ntfs3/ntfs3.ko",
+]
+
 def get_gki_modules_list(arch = None):
     """ Provides the list of GKI modules.
 
@@ -146,6 +152,7 @@ def get_gki_modules_list(arch = None):
         gki_modules_list += _ARM_GKI_MODULES_LIST
     elif arch == "arm64":
         gki_modules_list += _ARM64_GKI_MODULES_LIST
+        gki_modules_list += _STRELITZIA_EXTRA_MODULES
     elif arch == "i386":
         gki_modules_list += _X86_GKI_MODULES_LIST
     elif arch == "x86_64":
