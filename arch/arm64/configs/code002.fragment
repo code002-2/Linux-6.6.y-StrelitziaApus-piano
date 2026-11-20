@@ -164,3 +164,9 @@ CONFIG_NETFILTER_XT_MATCH_CGROUP=y
 
 # StrelitziaApus-scheduling：内建线程亲和性调度器
 CONFIG_STRELITZIA_SCHEDULING=y
+
+# ===== NTFS3：读写 Windows 磁盘（绕过 FUSE / ntfs-3g）=====
+# 主线自带的 Paragon 实现，m 形式编成独立模块，内核 Image 不变
+CONFIG_NTFS3_FS=m
+CONFIG_NTFS3_LZX_XPRESS=y
+CONFIG_NTFS3_FS_POSIX_ACL=y
